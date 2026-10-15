@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>L&amp;D Program Tracker</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2312304D'/%3E%3Cpath d='M9 22V10m0 12h6m3-12v12h3a6 6 0 0 0 0-12z' stroke='%234FB3B8' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">L&amp;D</div>
+        <div class="brand-text"><strong>Program Tracker</strong><span>Learning &amp; Development</span></div>
+      </div>
+      <nav class="nav" id="nav" aria-label="Sections"></nav>
+      <div class="sidebar-foot">
+        <span class="sync-pill" id="syncPill"><span class="sync-dot"></span><span id="syncText">Loading…</span></span>
+        <div class="who"><span id="whoName"></span><button class="link-btn" id="btnSettings" type="button">Settings</button></div>
+      </div>
+    </aside>
+    <div class="mobile-nav" id="mobileNav"></div>
+    <main>
+      <header class="topbar">
+        <div>
+          <h1 id="viewTitle">Overview</h1>
+          <p id="viewSub"></p>
+        </div>
+        <div class="top-actions">
+          <button class="btn" id="btnSync" type="button" title="Refresh from the shared sheet">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 0 0-14.9-3M4 4v4h4M4 13a8 8 0 0 0 14.9 3M20 20v-4h-4"/></svg>Refresh
+          </button>
+          <div class="menu" id="exportMenu">
+            <button class="btn" type="button" id="btnExport" aria-haspopup="true" aria-expanded="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 15V3m0 12-4-4m4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>Export
+            </button>
+            <div class="menu-list" role="menu">
+              <button type="button" data-export="all-xlsx">Everything (.xlsx)<small>Every dataset and announcement, one sheet each</small></button>
+              <button type="button" data-export="view-xlsx">Current view (.xlsx)<small>Only the rows your filters show</small></button>
+              <button type="button" data-export="view-csv">Current view (.csv)<small>Only the rows your filters show</small></button>
+              <button type="button" data-export="template">Blank upload template<small>Column headers the importer recognizes</small></button>
+            </div>
+          </div>
+          <button class="btn primary" id="btnUpload" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12m0-12-4 4m4-4 4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>Upload Excel / CSV
+          </button>
+        </div>
+      </header>
+      <div id="view"></div>
+    </main>
+  </div>
+
+  <div id="dropOverlay"><div>Drop your Excel or CSV file<small>.xlsx, .xls or .csv. You'll review it before anything is saved.</small></div></div>
+  <div id="modalRoot"></div>
+  <div id="confirmRoot"></div>
+  <div id="toasts" aria-live="polite"></div>
+  <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
