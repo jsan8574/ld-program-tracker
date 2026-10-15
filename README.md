@@ -16,9 +16,7 @@ A web dashboard for the L&D team. Upload the tracker workbook (or CSV) and it tu
 
 1. Create a new Google Sheet in the L&D shared Drive and name it **L&D Program Tracker – Data**.
 2. Open **Extensions → Apps Script**. Delete the sample code, paste in all of `apps-script/Code.gs`, and save.
-3. Open **Project Settings** (the gear icon) → **Script Properties** → **Add script property**:
-   - Property: `TEAM_PASSCODE`
-   - Value: a passcode you'll share only with the L&D team
+3. Reload the Sheet and use the new menu **L&D Tracker → Set team passcode** to choose the passcode you'll share only with the L&D team. Allow the permissions it asks for the first time. You can also add it under **Project Settings → Script Properties** as `TEAM_PASSCODE`.
 4. Click **Deploy → New deployment**, choose the type **Web app**, and set:
    - Execute as: **Me**
    - Who has access: **Anyone**. The passcode is what keeps the data private, so people don't need a Google sign-in.

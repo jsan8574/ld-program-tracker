@@ -2,7 +2,7 @@
  * L&D Program Tracker — shared data store.
  *
  * Bind this script to a Google Sheet (Extensions → Apps Script), set the
- * TEAM_PASSCODE script property, then Deploy → New deployment → Web app
+ * team passcode (Sheet menu: L&D Tracker → Set team passcode), then Deploy → New deployment → Web app
  * (Execute as: Me, Who has access: Anyone). See README.md for the full steps.
  *
  * Each dataset lives in its own tab. Every row carries _id, _updatedBy and
@@ -23,6 +23,21 @@ var APPEND_ONLY = { activity: true };
 var META = ['_id', '_updatedBy', '_updatedAt'];
 var LOG_TAB = '_Change Log';
 
+// Adds an "L&D Tracker" menu to the Sheet so the owner can set or change the team passcode.
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('L&D Tracker').addItem('Set team passcode', 'setTeamPasscode').addToUi();
+}
+
+function setTeamPasscode() {
+  var ui = SpreadsheetApp.getUi();
+  var res = ui.prompt('Team passcode', 'Enter the passcode the L&D team will type into the dashboard (at least 6 characters).', ui.ButtonSet.OK_CANCEL);
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+  var value = res.getResponseText().trim();
+  if (value.length < 6) { ui.alert('Please use at least 6 characters.'); return; }
+  PropertiesService.getScriptProperties().setProperty('TEAM_PASSCODE', value);
+  ui.alert('Passcode saved. Share it with the L&D team; everyone types it once in the dashboard.');
+}
+
 function doGet() {
   return json_({ ok: true, service: 'L&D Program Tracker', note: 'Use POST requests from the dashboard.' });
 }
@@ -36,7 +51,7 @@ function doPost(e) {
   }
 
   var passcode = PropertiesService.getScriptProperties().getProperty('TEAM_PASSCODE');
-  if (!passcode) return json_({ ok: false, error: 'TEAM_PASSCODE is not set in the Apps Script project settings' });
+  if (!passcode) return json_({ ok: false, error: 'The team passcode is not set yet. In the Google Sheet, use L&D Tracker → Set team passcode.' });
   if (String(req.key || '') !== passcode) return json_({ ok: false, error: 'Wrong team passcode' });
 
   try {
