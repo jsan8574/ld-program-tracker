@@ -15,13 +15,12 @@
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark" aria-hidden="true">L&amp;D</div>
         <div class="brand-text"><strong>Program Tracker</strong><span>Learning &amp; Development</span></div>
       </div>
       <nav class="nav" id="nav" aria-label="Sections"></nav>
       <div class="sidebar-foot">
         <span class="sync-pill" id="syncPill"><span class="sync-dot"></span><span id="syncText">Loading…</span></span>
-        <div class="who"><span id="whoName"></span><button class="link-btn" id="btnSettings" type="button">Settings</button></div>
+        <div class="who"><span id="whoName"></span><span class="who-links"><button class="link-btn" id="btnSwitch" type="button">Switch user</button><button class="link-btn" id="btnSettings" type="button" hidden>Settings</button></span></div>
       </div>
     </aside>
     <div class="mobile-nav" id="mobileNav"></div>
@@ -49,6 +48,10 @@
           <button class="btn primary" id="btnUpload" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12m0-12-4 4m4-4 4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>Upload Excel / CSV
           </button>
+        </div>
+        <div class="sync-note" role="note">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+          <span>This dashboard saves to a shared Google Sheet. If data suddenly looks missing or out of date, refresh the page to sync again.</span>
         </div>
       </header>
       <div id="view"></div>

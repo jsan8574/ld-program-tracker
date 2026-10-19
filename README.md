@@ -26,6 +26,8 @@ A web dashboard for the L&D team. Upload the tracker workbook (or CSV) and it tu
 
 The tabs (Program Tracker, Tasks & Logistics, Attendance, Assessments, Training Survey, Announcements, Activity Log, _Change Log) are created automatically the first time someone saves. Activity Log is append-only: the script refuses edits and deletes to it.
 
+**Users and Admins.** Everyone picks their name from the team list when they open the dashboard. Admins also see **Settings**, where they add or remove users and choose who is an Admin. The list is stored in the Sheet's **Users** tab. Until an Admin changes it, the default list is Jimmar San Buenaventura (Admin), Rekha Krishna and Zameer Amanulla.
+
 **If you change Code.gs later**, go to **Deploy → Manage deployments → Edit → Version: New version**. This keeps the same URL.
 
 ## Running without the shared sheet

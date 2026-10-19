@@ -134,6 +134,11 @@
       options: { Category: TASK_CATS, Status: TASK_STATUS },
       title: (r) => [r.Task, [r['Program Name'], r.Topic && r.Topic !== '-' ? r.Topic : ''].filter(Boolean).join(' · ')].filter(Boolean).join(' — ')
     },
+    users: {
+      label: 'Users', sheet: 'Users', noun: 'user',
+      columns: ['Name', 'Role', 'Email'],
+      title: (r) => r.Name || ''
+    },
     activity: {
       label: 'Activity Log', sheet: 'Activity Log', noun: 'activity entry',
       columns: ['When', 'Who', 'Action', 'Area', 'Item', 'Details', 'Dataset', 'Item ID', 'Snapshot'],
@@ -142,7 +147,7 @@
     }
   };
   const IMPORTABLE = ['tracker', 'attendance', 'assessments', 'survey'];
-  const ALL_DS = ['tracker', 'tasks', 'attendance', 'assessments', 'survey', 'announcements', 'activity'];
+  const ALL_DS = ['tracker', 'tasks', 'attendance', 'assessments', 'survey', 'announcements', 'users', 'activity'];
   for (const k of ALL_DS) { const d = DS[k]; d.dates = d.dates || []; d.datetimes = d.datetimes || []; d.numbers = d.numbers || []; d.long = d.long || []; d.options = d.options || {}; d.ignore = (d.ignore || []).concat(['Last Updated By', 'Last Updated At']); }
 
   // ---------------------------------------------------------------- Dates
@@ -284,6 +289,7 @@
       if (state.pendingWrites > 0) return; // a save is in flight; the next poll picks it up
       const next = emptyData();
       for (const k of ALL_DS) next[k] = Array.isArray(j.data && j.data[k]) ? j.data[k] : [];
+      state.usersUnsupported = !(j.data && Array.isArray(j.data.users));
       state.data = next;
       persistLocal();
       setSync('ok', 'Last synced ' + new Date().toLocaleTimeString());
@@ -291,7 +297,7 @@
     } catch (e) {
       setSync('err', e.message);
       if (!quiet) toast('Could not reach the shared sheet: ' + e.message, true);
-      if (/passcode/i.test(e.message) && !quiet) openSettings(true);
+      if (/passcode/i.test(e.message) && !quiet) openSignIn(true);
     }
   }
 
@@ -535,7 +541,8 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[k]}</svg>
         ${esc(VIEWS[k].nav)}${k === 'announcements' && open ? `<span class="count">${open}</span>` : ''}${k === 'tasks' && lateTasks ? `<span class="count crit" title="Overdue tasks">${lateTasks}</span>` : ''}</button>`).join('');
     $('#mobileNav').innerHTML = NAV_ORDER.filter((k) => k !== 'sep').map((k) => `<button type="button" data-view="${k}" class="${state.view === k ? 'active' : ''}">${esc(VIEWS[k].nav)}${k === 'announcements' && open ? ` (${open})` : ''}</button>`).join('');
-    $('#whoName').textContent = settings.name ? 'Signed as ' + settings.name : '';
+    $('#whoName').textContent = settings.name ? settings.name : '';
+    $('#btnSettings').hidden = !isAdmin();
   }
   function go(view, filters) {
     if (!VIEWS[view]) view = 'overview';
@@ -1450,7 +1457,7 @@
       const iso = parseISO(v) ? v.slice(0, 10) : '';
       return `<label class="field">${label}<input class="input" type="date" data-col="${esc(col)}" value="${esc(iso)}">${!iso && v ? `<span class="note">Currently "${esc(v)}". Leave empty for TBD.</span>` : ds === 'tracker' ? '<span class="note">Leave empty for TBD</span>' : ''}</label>`;
     }
-    const known = uniq((d.options[col] || []).concat(state.data[ds].map((r) => r[col]).filter((x) => x && String(x).length < 60))).slice(0, 80);
+    const known = uniq((d.options[col] || []).concat(col === 'Program Owner' ? usersList().map((u) => u.Name) : [], state.data[ds].map((r) => r[col]).filter((x) => x && String(x).length < 60))).slice(0, 80);
     const list = known.length && !d.numbers.includes(col) ? `<datalist id="${id}">${known.map((o) => `<option value="${esc(o)}">`).join('')}</datalist>` : '';
     return `<label class="field">${label}<input class="input" ${d.numbers.includes(col) ? 'inputmode="decimal"' : ''} data-col="${esc(col)}" value="${esc(v)}" ${list ? `list="${id}"` : ''} autocomplete="off">${list}</label>`;
   }
@@ -1575,7 +1582,7 @@
     if (i.days === 0) return `<span class="days warn">Due today</span>`;
     return `<span class="days ${i.days <= 7 ? 'warn' : 'muted'}">Due ${when} · ${i.days}d</span>`;
   }
-  const teamNames = () => uniq(state.data.tracker.flatMap((r) => splitPeople(r['Program Owner'])).concat(state.data.tasks.map((t) => t.Owner), [settings.name])).sort();
+  const teamNames = () => uniq(usersList().map((u) => u.Name).concat(state.data.tracker.flatMap((r) => splitPeople(r['Program Owner'])), state.data.tasks.map((t) => t.Owner))).sort();
 
   function taskForm(t, isNew, topicPicker) {
     const v = (k) => esc(t[k] || '');
@@ -2077,7 +2084,8 @@
         toast(DS[k].label + ' cleared');
       }
     }));
-    $('#btnOpenSettings', el).addEventListener('click', () => openSettings());
+    const os = $('#btnOpenSettings', el);
+    if (isAdmin()) os.addEventListener('click', () => openSettings()); else os.remove();
     wireCommon(el);
   }
 
@@ -2340,25 +2348,129 @@
     toast(`Exported ${rows.length} rows`);
   }
 
-  // ---------------------------------------------------------------- Settings & first run
-  function openSettings(passcodeFocus) {
-    const firstRun = !settings.name;
+  // ---------------------------------------------------------------- Users & sign-in
+  // The team list lives in the shared sheet ("Users" tab). Until an admin changes it, these defaults are used.
+  const DEFAULT_USERS = [
+    { _id: 'user-1', Name: 'Jimmar San Buenaventura', Role: 'Admin', Email: '' },
+    { _id: 'user-2', Name: 'Rekha Krishna', Role: 'Member', Email: '' },
+    { _id: 'user-3', Name: 'Zameer Amanulla', Role: 'Member', Email: '' }
+  ];
+  const ROLES = ['Admin', 'Member'];
+  const usersList = () => (state.data.users.length ? state.data.users : DEFAULT_USERS).slice().sort((a, b) => String(a.Name).localeCompare(String(b.Name)));
+  const currentUser = () => usersList().find((u) => norm(u.Name) === norm(settings.name));
+  const isAdmin = () => { const u = currentUser(); return !!u && u.Role === 'Admin'; };
+  // The default list is saved to the sheet the first time an admin changes it.
+  async function ensureUsers() {
+    if (state.data.users.length) return true;
+    return commit('users', 'replace', { rows: DEFAULT_USERS.map((u) => Object.assign({}, u)) }, { action: 'Added', item: 'Users', details: 'Default user list saved' });
+  }
+
+  // Everyone: choose your name from the team list (and enter the team passcode when the shared sheet is connected).
+  function openSignIn(passcodeFocus) {
+    const signedIn = !!currentUser();
+    const users = usersList();
     const m = openModal(`
-      <div class="modal-head"><h2>${firstRun ? 'Welcome' : 'Settings'}</h2>${firstRun ? '' : '<button class="icon-btn" data-close type="button" aria-label="Close">✕</button>'}</div>
-      <form class="modal-body" id="setForm"><div class="form-grid" style="grid-template-columns:1fr">
-        ${firstRun ? '<p style="margin:0">Tell the team who you are. Your name is shown on the updates and announcements you post.</p>' : ''}
-        <label class="field">Your name<input class="input" id="sName" required value="${esc(settings.name)}" placeholder="e.g. Alex"></label>
-        <label class="field">Team passcode<input class="input" id="sPass" type="password" value="${esc(settings.passcode)}" autocomplete="off" placeholder="${apiUrl() ? 'Ask your L&D lead' : 'Only needed once the shared sheet is connected'}">
-          <span class="note">Keeps the shared sheet private to the team. It is set in the Apps Script project.</span></label>
-        <label class="field">Shared sheet web app URL<input class="input" id="sUrl" value="${esc(settings.apiUrl || CFG.apiUrl)}" placeholder="https://script.google.com/macros/s/…/exec">
-          <span class="note">${CFG.apiUrl ? 'Already set for the team in config.js. Only change this for testing.' : 'Paste the Apps Script deployment URL. Leave it empty to keep data in this browser only.'}</span></label>
-        <div id="sTest" class="note"></div>
+      <div class="modal-head"><h2>${signedIn ? 'Switch User' : 'Welcome'}</h2>${signedIn ? '<button class="icon-btn" data-close type="button" aria-label="Close">✕</button>' : ''}</div>
+      <form class="modal-body" id="siForm"><div class="form-grid" style="grid-template-columns:1fr">
+        <label class="field">Who are you?<select class="select" id="siName" required>
+          <option value="">Choose your name…</option>${users.map((u) => `<option ${norm(u.Name) === norm(settings.name) ? 'selected' : ''}>${esc(u.Name)}</option>`).join('')}</select>
+          <span class="note">Your name is shown on the updates and announcements you post. Not on the list? Ask an Admin to add you.</span></label>
+        ${apiUrl() ? `<label class="field">Team passcode<input class="input" id="siPass" type="password" value="${esc(settings.passcode)}" autocomplete="off" placeholder="Ask your team lead"></label>` : ''}
+        <div id="siMsg" class="note"></div>
       </div></form>
-      <div class="modal-foot">${apiUrl() || CFG.apiUrl ? '<button class="btn" id="sTestBtn" type="button">Test connection</button>' : ''}<button class="btn primary" id="sSave" type="button">${firstRun ? 'Continue' : 'Save'}</button></div>`,
-    { size: 'sm', locked: firstRun });
-    if (passcodeFocus) setTimeout(() => $('#sPass', m).focus(), 40);
-    const testBtn = $('#sTestBtn', m);
-    if (testBtn) testBtn.addEventListener('click', async () => {
+      <div class="modal-foot"><button class="btn primary" id="siGo" type="button">Continue</button></div>`, { size: 'sm', locked: !signedIn });
+    if (passcodeFocus && $('#siPass', m)) setTimeout(() => $('#siPass', m).focus(), 40);
+    const go = async () => {
+      const name = $('#siName', m).value;
+      if (!name) { $('#siName', m).focus(); return; }
+      const pass = $('#siPass', m) ? $('#siPass', m).value : settings.passcode;
+      const passChanged = pass !== settings.passcode;
+      if (apiUrl() && passChanged) {
+        $('#siMsg', m).textContent = 'Checking the passcode…';
+        const prev = settings.passcode;
+        settings.passcode = pass;
+        try { await api('ping'); } catch (e) { settings.passcode = prev; $('#siMsg', m).innerHTML = `<span class="pill crit">${esc(e.message)}</span>`; return; }
+      }
+      settings.name = name;
+      settings.passcode = pass;
+      lsSet(LS.settings, settings);
+      closeModal();
+      render();
+      if (apiUrl() && passChanged) loadRemote();
+    };
+    $('#siGo', m).addEventListener('click', go);
+    $('#siForm', m).addEventListener('submit', (e) => { e.preventDefault(); go(); });
+  }
+
+  // Admins only: manage the team list and the connection.
+  function openSettings() {
+    if (!isAdmin()) return toast('Settings are available to Admins only', true);
+    const users = usersList();
+    const admins = users.filter((u) => u.Role === 'Admin').length;
+    const m = openModal(`
+      <div class="modal-head"><h2>Settings</h2><button class="icon-btn" data-close type="button" aria-label="Close">✕</button></div>
+      <div class="modal-body">
+        <div class="form-group-title" style="margin-top:0">Users</div>
+        ${state.usersUnsupported ? '<div class="callout" style="margin:8px 0">The shared sheet\'s script needs updating before user changes can be saved for everyone. See the README.</div>' : ''}
+        <div class="table-wrap" style="max-height:none;margin-top:8px"><table class="data"><thead><tr><th>Name</th><th>Role</th><th>Email (optional)</th><th></th></tr></thead><tbody>
+          ${users.map((u) => `<tr style="cursor:default" data-uid="${esc(u._id)}">
+            <td><b>${esc(u.Name)}</b>${norm(u.Name) === norm(settings.name) ? ' <span class="row-meta">(you)</span>' : ''}</td>
+            <td><select class="select" data-urole style="min-height:32px;padding:4px 8px">${ROLES.map((r) => `<option ${r === u.Role ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
+            <td><input class="input" data-uemail value="${esc(u.Email || '')}" placeholder="name@company.com" style="min-height:32px;padding:4px 8px"></td>
+            <td><button class="btn sm ghost danger" type="button" data-udel ${u.Role === 'Admin' && admins <= 1 ? 'disabled title="Keep at least one Admin"' : ''}>Remove</button></td></tr>`).join('')}
+        </tbody></table></div>
+        <div class="add-user">
+          <input class="input" id="nuName" placeholder="Full name" maxlength="80">
+          <select class="select" id="nuRole">${ROLES.map((r) => `<option ${r === 'Member' ? 'selected' : ''}>${r}</option>`).join('')}</select>
+          <button class="btn primary" type="button" id="nuAdd">+ Add user</button>
+        </div>
+        <p class="note">Admins see Settings and manage this list. Everyone can upload data, edit and add entries.</p>
+
+        <div class="form-group-title">Connection</div>
+        <div class="form-grid" style="grid-template-columns:1fr;margin-top:8px">
+          <label class="field">Team passcode (this browser)<input class="input" id="sPass" type="password" value="${esc(settings.passcode)}" autocomplete="off"></label>
+          <label class="field">Shared sheet web app URL<input class="input" id="sUrl" value="${esc(settings.apiUrl || CFG.apiUrl)}" placeholder="https://script.google.com/macros/s/…/exec">
+            <span class="note">${CFG.apiUrl ? 'Already set for the team in config.js. Only change this for testing.' : 'Paste the Apps Script deployment URL. Leave it empty to keep data in this browser only.'}</span></label>
+          <div id="sTest" class="note"></div>
+        </div>
+      </div>
+      <div class="modal-foot"><button class="btn" id="sTestBtn" type="button">Test connection</button><button class="btn primary" id="sSave" type="button">Save</button></div>`);
+
+    const userById = (id) => usersList().find((u) => u._id === id);
+    const reopen = () => { closeModal(); openSettings(); };
+    $$('[data-urole]', m).forEach((s) => s.addEventListener('change', async () => {
+      const u = userById(s.closest('tr').dataset.uid);
+      if (u.Role === 'Admin' && s.value !== 'Admin' && usersList().filter((x) => x.Role === 'Admin').length <= 1) { s.value = 'Admin'; return toast('Keep at least one Admin', true); }
+      await ensureUsers();
+      await commit('users', 'upsert', { row: Object.assign({}, state.data.users.find((x) => x._id === u._id) || u, { Role: s.value }) });
+      toast(`${u.Name} is now ${s.value === 'Admin' ? 'an Admin' : 'a Member'}`);
+      reopen();
+    }));
+    $$('[data-uemail]', m).forEach((inp) => inp.addEventListener('change', async () => {
+      const u = userById(inp.closest('tr').dataset.uid);
+      await ensureUsers();
+      await commit('users', 'upsert', { row: Object.assign({}, state.data.users.find((x) => x._id === u._id) || u, { Email: inp.value.trim() }) });
+      toast('Email saved');
+    }));
+    $$('[data-udel]', m).forEach((b) => b.addEventListener('click', async () => {
+      const u = userById(b.closest('tr').dataset.uid);
+      if (!(await confirmDelete({ title: 'Remove this user?', okLabel: 'Remove', lines: [`${u.Name} will no longer appear in the team list.`, 'Their past updates and announcements stay as they are.'] }))) return;
+      await ensureUsers();
+      await commit('users', 'delete', { id: u._id });
+      toast(`${u.Name} removed`);
+      reopen();
+    }));
+    $('#nuAdd', m).addEventListener('click', async () => {
+      const name = $('#nuName', m).value.trim().replace(/\s+/g, ' ');
+      if (!name) { $('#nuName', m).focus(); return; }
+      if (usersList().some((u) => norm(u.Name) === norm(name))) return toast('That person is already on the list', true);
+      await ensureUsers();
+      await commit('users', 'upsert', { row: { _id: uid(), Name: name, Role: $('#nuRole', m).value, Email: '' } });
+      toast(`${name} added`);
+      reopen();
+    });
+    $('#nuName', m).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#nuAdd', m).click(); } });
+    $('#sTestBtn', m).addEventListener('click', async () => {
       const prev = { url: settings.apiUrl, pass: settings.passcode };
       settings.apiUrl = $('#sUrl', m).value.trim() === CFG.apiUrl ? '' : $('#sUrl', m).value.trim();
       settings.passcode = $('#sPass', m).value;
@@ -2366,21 +2478,17 @@
       try { await api('ping'); $('#sTest', m).innerHTML = '<span class="pill good">Connected</span>'; } catch (e) { $('#sTest', m).innerHTML = `<span class="pill crit">${esc(e.message)}</span>`; }
       settings.apiUrl = prev.url; settings.passcode = prev.pass;
     });
-    const save = () => {
-      const name = $('#sName', m).value.trim();
-      if (!name) { $('#sName', m).focus(); return; }
+    $('#sSave', m).addEventListener('click', () => {
       const url = $('#sUrl', m).value.trim();
       const changed = url !== (settings.apiUrl || CFG.apiUrl) || $('#sPass', m).value !== settings.passcode;
-      settings.name = name;
       settings.passcode = $('#sPass', m).value;
       settings.apiUrl = url === CFG.apiUrl ? '' : url;
       lsSet(LS.settings, settings);
       closeModal();
       renderNav();
       if (changed) { if (apiUrl()) loadRemote(); else setSync('local'); }
-    };
-    $('#sSave', m).addEventListener('click', save);
-    $('#setForm', m).addEventListener('submit', (e) => { e.preventDefault(); save(); });
+      toast('Settings saved');
+    });
   }
 
   // ---------------------------------------------------------------- Shared wiring
@@ -2432,6 +2540,7 @@
     $('#fileInput').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; handleFile(f); });
     $('#btnSync').addEventListener('click', () => { if (apiUrl()) loadRemote(); else { toast('Not connected to a shared sheet yet. Data is saved in this browser.'); } });
     $('#btnSettings').addEventListener('click', () => openSettings());
+    $('#btnSwitch').addEventListener('click', () => openSignIn());
 
     // Drag & drop a file anywhere
     let depth = 0;
@@ -2455,7 +2564,7 @@
   setupGlobal();
   setSync(apiUrl() ? 'busy' : 'local');
   render();
-  if (!settings.name) openSettings();
-  else if (apiUrl() && !settings.passcode) openSettings(true);
+  if (!currentUser()) openSignIn();
+  else if (apiUrl() && !settings.passcode) openSignIn(true);
   if (apiUrl()) loadRemote();
 })();
