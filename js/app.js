@@ -1,4 +1,4 @@
-/* L&D Program Tracker — static dashboard backed by a shared Google Sheet (Apps Script) */
+/* L&D Program Tracker — static dashboard backed by a shared database (Apps Script web app) */
 (() => {
   'use strict';
 
@@ -263,9 +263,9 @@
     state.sync = { mode, text: text || '' };
     const pill = $('#syncPill');
     pill.className = 'sync-pill ' + mode;
-    const label = { local: 'Local only · not shared', ok: 'Shared sheet · synced', busy: 'Syncing…', err: 'Sync problem' }[mode] || mode;
+    const label = { local: 'Local only · not shared', ok: 'Database · synced', busy: 'Syncing…', err: 'Sync problem' }[mode] || mode;
     $('#syncText').textContent = label;
-    pill.title = text || (mode === 'local' ? 'No shared Google Sheet connected. Data is saved in this browser only.' : '');
+    pill.title = text || (mode === 'local' ? 'No shared database connected. Data is saved in this browser only.' : '');
   }
 
   async function api(action, payload) {
@@ -296,7 +296,7 @@
       safeRender();
     } catch (e) {
       setSync('err', e.message);
-      if (!quiet) toast('Could not reach the shared sheet: ' + e.message, true);
+      if (!quiet) toast('Could not reach the database: ' + e.message, true);
       if (/passcode/i.test(e.message) && !quiet) openSignIn(true);
     }
   }
@@ -318,7 +318,7 @@
   // A Sheets cell holds 50,000 characters, so very large restore copies are dropped.
   function makeLog(ds, action, item, details, snapshot, itemId) {
     let snap = snapshot ? JSON.stringify(snapshot) : '';
-    if (snap.length > 45000) { snap = ''; details = (details ? details + ' · ' : '') + 'Too large to keep a restore copy here. Use the Google Sheet version history or an export.'; }
+    if (snap.length > 45000) { snap = ''; details = (details ? details + ' · ' : '') + 'Too large to keep a restore copy here. Ask your Admin to restore it from the database history, or use an export.'; }
     return { _id: uid(), When: new Date().toISOString(), Who: settings.name || 'Team member', Action: action, Area: DS[ds].label, Item: short(item, 140), Details: details || '', Dataset: ds, 'Item ID': itemId || '', Snapshot: snap };
   }
   function autoLog(ds, op, arg) {
@@ -336,7 +336,7 @@
     return null;
   }
 
-  // Applies a change locally, re-renders, then writes it to the shared sheet.
+  // Applies a change locally, re-renders, then writes it to the shared database.
   // `log`: an activity entry spec ({action, item, details, snapshot, itemId}), false for none, or omitted to derive one.
   async function commit(ds, op, arg, log) {
     let entry = null;
@@ -373,7 +373,7 @@
       return true;
     } catch (e) {
       setSync('err', e.message);
-      toast('Not saved to the shared sheet: ' + e.message, true);
+      toast('Not saved to the database: ' + e.message, true);
       return false;
     } finally {
       state.pendingWrites--;
@@ -529,7 +529,7 @@
     assessments: { title: 'Assessments & MOF', nav: 'Assessments', sub: () => 'Pre, mid and post assessments, quizzes and manager observations', render: (el) => renderDataset(el, 'assessments') },
     survey: { title: 'Training Survey', nav: 'Survey', sub: () => 'Learner feedback after each session', render: (el) => renderDataset(el, 'survey') },
     announcements: { title: 'Team Board', nav: 'Team Board', sub: () => 'Announcements and items the team needs to address', render: renderAnnouncements },
-    data: { title: 'Import & Data', nav: 'Import & Data', sub: () => 'Upload templates, export data, connect the shared sheet', render: renderData }
+    data: { title: 'Import & Data', nav: 'Import & Data', sub: () => 'Upload templates, export data, manage the connection', render: renderData }
   };
   const NAV_ORDER = ['overview', 'impact', 'sep', 'tracker', 'tasks', 'attendance', 'assessments', 'survey', 'sep', 'announcements', 'activity', 'data'];
 
@@ -2049,7 +2049,7 @@
         <h2>Drag & Drop an Excel or CSV File Here</h2>
         <p>or click to browse. Every sheet is matched to a dataset by its column headers. You review the match before anything is saved.</p>
       </div>
-      <div class="card section"><div class="card-head"><h2>Datasets</h2><span class="sub">${connected ? 'Stored in the shared Google Sheet' : 'Stored in this browser only'}</span></div>
+      <div class="card section"><div class="card-head"><h2>Datasets</h2><span class="sub">${connected ? 'Stored in the shared database' : 'Stored in this browser only'}</span></div>
         <div class="ds-list">${ALL_DS.map((k) => {
           const rows = state.data[k];
           const last = rows.reduce((m, r) => (r._updatedAt && r._updatedAt > m ? r._updatedAt : m), '');
@@ -2068,8 +2068,8 @@
           <p class="note">Header rows don't need to be on row 1, and extra columns are kept. Excel dates and CSV dates are both understood.</p></div>
         <div class="card"><div class="card-head"><h2>Shared Storage</h2><span class="pill ${connected ? 'good' : 'warn'}">${connected ? 'Connected' : 'Not connected'}</span></div>
           ${connected
-            ? `<p style="margin-top:0">Everyone on the team reads and writes the same Google Sheet. Changes show up for others within ${CFG.pollSeconds} seconds, or right away when they click Refresh.</p>`
-            : '<div class="callout">Right now data lives only in this browser. Connect the team Google Sheet so everyone sees the same thing. The setup steps are in the README, and take about 10 minutes.</div>'}
+            ? `<p style="margin-top:0">Everyone on the team reads and writes the same database. Changes show up for others within ${CFG.pollSeconds} seconds, or right away when they click Refresh.</p>`
+            : '<div class="callout">Right now data lives only in this browser. Connect the team database so everyone sees the same thing. The setup steps are in the README, and take about 10 minutes.</div>'}
           <div style="margin-top:12px"><button class="btn" type="button" id="btnOpenSettings">Connection settings</button></div></div>
       </div>`;
     const dz = $('#dz', el);
@@ -2349,7 +2349,7 @@
   }
 
   // ---------------------------------------------------------------- Users & sign-in
-  // The team list lives in the shared sheet ("Users" tab). Until an admin changes it, these defaults are used.
+  // The team list lives in the shared database ("Users" table). Until an admin changes it, these defaults are used.
   const DEFAULT_USERS = [
     { _id: 'user-1', Name: 'Jimmar San Buenaventura', Role: 'Admin', Email: '' },
     { _id: 'user-2', Name: 'Rekha Krishna', Role: 'Member', Email: '' },
@@ -2359,13 +2359,13 @@
   const usersList = () => (state.data.users.length ? state.data.users : DEFAULT_USERS).slice().sort((a, b) => String(a.Name).localeCompare(String(b.Name)));
   const currentUser = () => usersList().find((u) => norm(u.Name) === norm(settings.name));
   const isAdmin = () => { const u = currentUser(); return !!u && u.Role === 'Admin'; };
-  // The default list is saved to the sheet the first time an admin changes it.
+  // The default list is saved to the database the first time an admin changes it.
   async function ensureUsers() {
     if (state.data.users.length) return true;
     return commit('users', 'replace', { rows: DEFAULT_USERS.map((u) => Object.assign({}, u)) }, { action: 'Added', item: 'Users', details: 'Default user list saved' });
   }
 
-  // Everyone: choose your name from the team list (and enter the team passcode when the shared sheet is connected).
+  // Everyone: choose your name from the team list (and enter the team passcode when the shared database is connected).
   function openSignIn(passcodeFocus) {
     const signedIn = !!currentUser();
     const users = usersList();
@@ -2411,7 +2411,7 @@
       <div class="modal-head"><h2>Settings</h2><button class="icon-btn" data-close type="button" aria-label="Close">✕</button></div>
       <div class="modal-body">
         <div class="form-group-title" style="margin-top:0">Users</div>
-        ${state.usersUnsupported ? '<div class="callout" style="margin:8px 0">The shared sheet\'s script needs updating before user changes can be saved for everyone. See the README.</div>' : ''}
+        ${state.usersUnsupported ? '<div class="callout" style="margin:8px 0">The database connection needs updating before user changes can be saved for everyone. See the README.</div>' : ''}
         <div class="table-wrap" style="max-height:none;margin-top:8px"><table class="data"><thead><tr><th>Name</th><th>Role</th><th>Email (optional)</th><th></th></tr></thead><tbody>
           ${users.map((u) => `<tr style="cursor:default" data-uid="${esc(u._id)}">
             <td><b>${esc(u.Name)}</b>${norm(u.Name) === norm(settings.name) ? ' <span class="row-meta">(you)</span>' : ''}</td>
@@ -2429,8 +2429,8 @@
         <div class="form-group-title">Connection</div>
         <div class="form-grid" style="grid-template-columns:1fr;margin-top:8px">
           <label class="field">Team passcode (this browser)<input class="input" id="sPass" type="password" value="${esc(settings.passcode)}" autocomplete="off"></label>
-          <label class="field">Shared sheet web app URL<input class="input" id="sUrl" value="${esc(settings.apiUrl || CFG.apiUrl)}" placeholder="https://script.google.com/macros/s/…/exec">
-            <span class="note">${CFG.apiUrl ? 'Already set for the team in config.js. Only change this for testing.' : 'Paste the Apps Script deployment URL. Leave it empty to keep data in this browser only.'}</span></label>
+          <label class="field">Database connection URL<input class="input" id="sUrl" value="${esc(settings.apiUrl || CFG.apiUrl)}" placeholder="https://…/exec">
+            <span class="note">${CFG.apiUrl ? 'Already set for the team in config.js. Only change this for testing.' : 'Paste the database connection URL. Leave it empty to keep data in this browser only.'}</span></label>
           <div id="sTest" class="note"></div>
         </div>
       </div>
@@ -2538,7 +2538,7 @@
     });
     $('#btnUpload').addEventListener('click', () => $('#fileInput').click());
     $('#fileInput').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; handleFile(f); });
-    $('#btnSync').addEventListener('click', () => { if (apiUrl()) loadRemote(); else { toast('Not connected to a shared sheet yet. Data is saved in this browser.'); } });
+    $('#btnSync').addEventListener('click', () => { if (apiUrl()) loadRemote(); else { toast('Not connected to the shared database yet. Data is saved in this browser.'); } });
     $('#btnSettings').addEventListener('click', () => openSettings());
     $('#btnSwitch').addEventListener('click', () => openSignIn());
 

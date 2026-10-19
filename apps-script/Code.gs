@@ -52,7 +52,7 @@ function doPost(e) {
   }
 
   var passcode = PropertiesService.getScriptProperties().getProperty('TEAM_PASSCODE');
-  if (!passcode) return json_({ ok: false, error: 'The team passcode is not set yet. In the Google Sheet, use L&D Tracker → Set team passcode.' });
+  if (!passcode) return json_({ ok: false, error: 'The team passcode is not set yet. Ask your Admin to set it.' });
   if (String(req.key || '') !== passcode) return json_({ ok: false, error: 'Wrong team passcode' });
 
   try {
