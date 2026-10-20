@@ -303,9 +303,9 @@
 
   async function loadRemote(quiet) {
     if (!apiUrl()) { setSync('local'); return; }
-    if (!quiet) setSync('busy');
+    if (!quiet) { setSync('busy'); busy(true, 'Loading the latest data. Please wait…'); }
     try {
-      if (state.outbox.length) await flush();
+      if (state.outbox.length) await flush(quiet);
       const seq = writeSeq;
       const j = await api('all');
       // A save finished (or started) while this was loading, so this copy is already out of date.
@@ -323,6 +323,8 @@
       setSync('err', e.message);
       if (!quiet) toast('Could not reach the database: ' + e.message, true);
       if (/passcode/i.test(e.message) && !quiet) openSignIn(true);
+    } finally {
+      if (!quiet) busy(false);
     }
   }
 
@@ -399,6 +401,23 @@
     }
   }
 
+  // ---------------------------------------------------------------- "Update in progress" layer
+  // Blurs the page while changes are saving or the latest data is loading. Shown only if it takes
+  // longer than a moment, so quick saves don't flicker.
+  let busyCount = 0, busyTimer = null;
+  function busy(on, text) {
+    const layer = $('#busyLayer');
+    if (!layer) return;
+    if (on) {
+      busyCount++;
+      $('#busyText').textContent = text || 'Please wait…';
+      if (busyCount === 1) { clearTimeout(busyTimer); busyTimer = setTimeout(() => { layer.hidden = false; }, 250); }
+    } else {
+      busyCount = Math.max(0, busyCount - 1);
+      if (!busyCount) { clearTimeout(busyTimer); layer.hidden = true; }
+    }
+  }
+
   // ---------------------------------------------------------------- Save queue
   // Every change goes into a queue kept in this browser, then is sent in order. If a save fails (slow
   // connection, database busy), it stays queued and is retried automatically, so nothing is lost or
@@ -409,15 +428,17 @@
   const saveOutbox = () => { try { localStorage.setItem(LS.outbox, JSON.stringify(state.outbox)); } catch (e) { /* too large to keep offline */ } };
   // Errors that a retry won't fix (the server doesn't know this kind of data yet).
   const isPermanent = (msg) => /Unknown dataset|can only be added|Unknown action|missing _id/i.test(msg);
-  function flush() {
+  function flush(quiet) {
     if (!apiUrl()) { state.outbox = []; saveOutbox(); return Promise.resolve(true); }
     if (flushing) return flushing;
     flushing = (async () => {
+      if (!quiet) busy(true, 'Saving your changes. Please wait…');
       const stuck = [];
       let ok = true;
       while (state.outbox.length) {
         const item = state.outbox[0];
         setSync('busy', `Saving ${state.outbox.length} change${state.outbox.length === 1 ? '' : 's'}…`);
+        if (!quiet) $('#busyText').textContent = `Saving ${state.outbox.length} change${state.outbox.length === 1 ? '' : 's'}. Please wait…`;
         try {
           await api(item.op, Object.assign({ dataset: item.ds }, item.arg));
           state.outbox.shift();
@@ -427,7 +448,7 @@
           ok = false;
           setSync('err', `${state.outbox.length + stuck.length} change${state.outbox.length + stuck.length === 1 ? '' : 's'} waiting to save. Retrying automatically. (${e.message})`);
           clearTimeout(retryTimer);
-          retryTimer = setTimeout(() => flush(), 20000);
+          retryTimer = setTimeout(() => flush(true), 20000);
           break;
         }
         saveOutbox();
@@ -438,7 +459,7 @@
       else if (ok) setSync('ok', 'Saved ' + new Date().toLocaleTimeString());
       return ok && !stuck.length;
     })();
-    return flushing.finally(() => { flushing = null; });
+    return flushing.finally(() => { flushing = null; if (!quiet) busy(false); });
   }
 
   // ---------------------------------------------------------------- UI utilities
@@ -3034,7 +3055,7 @@
 
     // Keep everyone's view fresh
     setInterval(() => { if (apiUrl() && !document.hidden && !flushing) loadRemote(true); }, Math.max(15, CFG.pollSeconds) * 1000);
-    window.addEventListener('online', () => { if (apiUrl()) flush().then(() => loadRemote(true)); });
+    window.addEventListener('online', () => { if (apiUrl()) flush(true).then(() => loadRemote(true)); });
     window.addEventListener('beforeunload', (e) => { if (state.outbox.length && !state.usersUnsupported) { e.preventDefault(); e.returnValue = ''; } });
     document.addEventListener('visibilitychange', () => { if (!document.hidden && apiUrl()) loadRemote(true); });
   }
