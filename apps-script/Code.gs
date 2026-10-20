@@ -12,6 +12,7 @@
 var TABS = {
   tracker: 'Program Tracker',
   tasks: 'Tasks & Logistics',
+  content: 'Content',
   attendance: 'Attendance',
   assessments: 'Assessments',
   survey: 'Training Survey',

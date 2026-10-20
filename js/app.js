@@ -134,9 +134,17 @@
       options: { Category: TASK_CATS, Status: TASK_STATUS },
       title: (r) => [r.Task, [r['Program Name'], r.Topic && r.Topic !== '-' ? r.Topic : ''].filter(Boolean).join(' · ')].filter(Boolean).join(' — ')
     },
+    content: {
+      label: 'Content', sheet: 'Content', noun: 'content item',
+      columns: ['Content Title', 'Content Type', 'Program Name', 'Topic', 'Topic ID', 'Owner', 'Status', 'Start Date', 'Due Date', 'Link', 'Notes', 'Created By', 'Created At'],
+      dates: ['Start Date', 'Due Date'], long: ['Notes'],
+      options: { 'Content Type': ['Deck / PPT', 'Workbook', 'Facilitator Guide', 'Quiz / Assessment', 'Video', 'Self-paced Module', 'Flyer / Comms', 'Survey Form', 'Job Aid', 'Other'],
+        Status: ['Not Started', 'Drafting', 'In Review', 'Revisions', 'Approved', 'Published', 'On Hold'] },
+      title: (r) => r['Content Title'] || ''
+    },
     timelog: {
       label: 'Time Log', sheet: 'Time Log', noun: 'time entry',
-      columns: ['Person', 'Task', 'Program Name', 'Topic', 'Start Date', 'End Date', 'Hours per Day', 'Include Weekends', 'Working Days', 'Total Hours', 'Notes', 'Task ID', 'Topic ID', 'Logged By', 'Logged At'],
+      columns: ['Person', 'Item Type', 'Task', 'Program Name', 'Topic', 'Start Date', 'End Date', 'Hours per Day', 'Include Weekends', 'Working Days', 'Total Hours', 'Notes', 'Task ID', 'Topic ID', 'Logged By', 'Logged At'],
       dates: ['Start Date', 'End Date'], numbers: ['Hours per Day', 'Working Days', 'Total Hours'],
       title: (r) => `${r.Person || ''} · ${r.Task || ''}`
     },
@@ -153,7 +161,7 @@
     }
   };
   const IMPORTABLE = ['tracker', 'attendance', 'assessments', 'survey'];
-  const ALL_DS = ['tracker', 'tasks', 'timelog', 'attendance', 'assessments', 'survey', 'announcements', 'users', 'activity'];
+  const ALL_DS = ['tracker', 'tasks', 'content', 'timelog', 'attendance', 'assessments', 'survey', 'announcements', 'users', 'activity'];
   for (const k of ALL_DS) { const d = DS[k]; d.dates = d.dates || []; d.datetimes = d.datetimes || []; d.numbers = d.numbers || []; d.long = d.long || []; d.options = d.options || {}; d.ignore = (d.ignore || []).concat(['Last Updated By', 'Last Updated At']); }
 
   // ---------------------------------------------------------------- Dates
@@ -194,7 +202,7 @@
     const s = norm(v);
     if (!s) return '';
     if (s === 'n/a' || s === 'na') return 'plain';
-    if (/^(completed?|done|approved|sent|present|addressed|yes)$/.test(s)) return 'good';
+    if (/^(completed?|done|approved|published|sent|present|addressed|yes)$/.test(s)) return 'good';
     if (/cancel|absent|overdue|no.?show|blocked/.test(s)) return 'crit';
     if (/hold|late|<|partial|pending/.test(s)) return 'warn';
     if (/progress|ongoing|scheduled|review|draft/.test(s)) return 'prog';
@@ -255,7 +263,7 @@
     view: lsGet(LS.view, 'overview'),
     taskSel: new Set(),
     dsSel: { attendance: new Set(), assessments: new Set(), survey: new Set() },
-    filters: { overview: lsGet(LS.ovFilter, {}), impact: { dim: 'designation' }, tracker: {}, tasks: { status: 'open' }, attendance: {}, assessments: {}, survey: {}, announcements: { status: 'Open' }, activity: {} },
+    filters: { overview: lsGet(LS.ovFilter, {}), impact: { dim: 'designation' }, tracker: {}, tasks: { status: 'open' }, content: { status: 'open' }, attendance: {}, assessments: {}, survey: {}, announcements: { status: 'Open' }, activity: {} },
     sort: {},
     trackerMode: 'table',
     sync: { mode: 'local', text: '' },
@@ -275,6 +283,27 @@
     const label = { local: 'Local only · not shared', ok: 'Database · synced', busy: waiting ? `Saving ${waiting}…` : 'Syncing…', err: waiting ? `${waiting} waiting to save` : 'Sync problem' }[mode] || mode;
     $('#syncText').textContent = label;
     pill.title = text || (mode === 'local' ? 'No shared database connected. Data is saved in this browser only.' : '');
+    syncWindow(mode, waiting);
+  }
+  // Small corner window: shown while syncing, or while changes haven't reached the database yet.
+  let syncWinTimer = null;
+  function syncWindow(mode, waiting) {
+    const win = $('#syncMini');
+    if (!win) return;
+    clearTimeout(syncWinTimer);
+    if (mode === 'busy') {
+      $('#syncMiniText').textContent = waiting ? `Saving ${waiting} change${waiting === 1 ? '' : 's'}. Please wait…` : 'The system is updating. Please wait…';
+      win.className = 'sync-mini';
+      syncWinTimer = setTimeout(() => { win.hidden = false; }, 400);
+    } else if (mode === 'err') {
+      $('#syncMiniText').textContent = waiting
+        ? `${waiting} change${waiting === 1 ? ' is' : 's are'} not saved yet. Retrying automatically. Please keep this page open.`
+        : 'Not synced. Check your connection, then click Refresh.';
+      win.className = 'sync-mini warn';
+      win.hidden = false;
+    } else {
+      win.hidden = true;
+    }
   }
 
   const TIMEOUT_MS = 45000;
@@ -303,7 +332,8 @@
 
   async function loadRemote(quiet) {
     if (!apiUrl()) { setSync('local'); return; }
-    if (!quiet) { setSync('busy'); busy(true, 'Loading the latest data. Please wait…'); }
+    setSync('busy');
+    if (!quiet) busy(true, 'Loading the latest data. Please wait…');
     try {
       if (state.outbox.length) await flush(quiet);
       const seq = writeSeq;
@@ -597,6 +627,7 @@
     survey: '<path d="M12 17.3l-6.2 3.7 1.6-7L2 9.2l7.1-.6L12 2l2.9 6.6 7.1.6-5.4 4.8 1.6 7z"/>',
     announcements: '<path d="M3 11v2a1 1 0 0 0 1 1h3l5 4V6L7 10H4a1 1 0 0 0-1 1zM16 8a5 5 0 0 1 0 8M19 5a9 9 0 0 1 0 14"/>',
     impact: '<path d="M3 17l6-6 4 4 8-8M15 7h6v6"/>',
+    content: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h5"/>',
     tasks: '<path d="M9 11l2 2 4-4M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/>',
     activity: '<path d="M12 8v4l3 2M3.05 11a9 9 0 1 1 .5 4M3 4v7h7"/>',
     data: '<path d="M12 3c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>'
@@ -605,6 +636,7 @@
     overview: { title: 'Program Delivery', nav: 'Program Delivery', sub: () => 'What the L&D team is delivering: completion, deadlines, workload and tasks', render: renderOverview },
     impact: { title: 'Training Impact', nav: 'Training Impact', sub: () => 'Output, effectiveness and ROI of the training delivered', render: renderImpact },
     tracker: { title: 'Program Tracker', nav: 'Program Tracker', sub: () => 'Click a row to edit it, or change a status right in the table', render: renderTracker },
+    content: { title: 'Content', nav: 'Content', sub: () => 'Content being created for each program: owners, due dates, status and time spent', render: renderContent },
     tasks: { title: 'Tasks & Logistics', nav: 'Tasks', sub: () => 'Every task and logistics item across programs and topics', render: renderTasks },
     activity: { title: 'Activity Log', nav: 'Activity Log', sub: () => 'Every add, edit, delete and restore, with who did it and when', render: renderActivity },
     attendance: { title: 'Attendance', nav: 'Attendance', sub: () => 'Who attended each session', render: (el) => renderDataset(el, 'attendance') },
@@ -613,7 +645,7 @@
     announcements: { title: 'Team Board', nav: 'Team Board', sub: () => 'Announcements and items the team needs to address', render: renderAnnouncements },
     data: { title: 'Import & Data', nav: 'Import & Data', sub: () => 'Upload templates, export data, manage the connection', render: renderData }
   };
-  const NAV_ORDER = ['overview', 'impact', 'sep', 'tracker', 'tasks', 'attendance', 'assessments', 'survey', 'sep', 'announcements', 'activity', 'data'];
+  const NAV_ORDER = ['overview', 'impact', 'sep', 'tracker', 'tasks', 'content', 'attendance', 'assessments', 'survey', 'sep', 'announcements', 'activity', 'data'];
 
   function renderNav() {
     const open = state.data.announcements.filter((a) => a.Status !== 'Addressed').length;
@@ -1683,6 +1715,7 @@
   function openEditor(ds, id, opts) {
     opts = opts || {};
     if (ds === 'tasks') return openTaskModal(id);
+    if (ds === 'content') return openContentModal(id);
     if (ds === 'activity') return;
     const d = DS[ds];
     const existing = id ? state.data[ds].find((r) => r._id === id) : null;
@@ -2043,8 +2076,9 @@
 
   // Log-time window for one task (stacks above the topic editor).
   function openTimeLog(taskId, onChange) {
-    const t = state.data.tasks.find((x) => x._id === taskId);
-    if (!t) return;
+    const item = timeItem(taskId);
+    if (!item) return;
+    const t = { _id: item.id, Task: item.title, Owner: item.owner };
     const root = $('#confirmRoot');
     const entries = timeFor(taskId);
     const me = currentUser() ? currentUser().Name : settings.name;
@@ -2052,7 +2086,7 @@
     const today = isoLocal(todayDate());
     const total = entries.reduce((s, e) => s + entryHours(e), 0);
     root.innerHTML = `<div class="modal-back top"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="tlTitle">
-      <div class="modal-head"><div><h2 id="tlTitle">Time Spent</h2><div class="note">${esc(t.Task)} · ${esc(itemTitle('tracker', parentOf(t) || t))}</div></div>
+      <div class="modal-head"><div><h2 id="tlTitle">Time Spent</h2><div class="note">${esc(t.Task)} · ${esc(item.where)}</div></div>
         <button class="icon-btn" type="button" data-tl="close" aria-label="Close">✕</button></div>
       <div class="modal-body">
         <div class="callout info" style="margin-bottom:12px">Log each stretch of work: <b>from</b> and <b>to</b> dates and the <b>hours per day</b>. Work spread over several days, a few hours a day, is one entry. Totals count working days (Mon–Fri) unless you tick "Include weekends".</div>
@@ -2100,10 +2134,9 @@
       if (k === 'add') {
         const c = calc();
         if (!c) return;
-        const p = parentOf(t) || t;
         const person = $('#tlPerson', root).value;
         const row = {
-          _id: uid(), 'Task ID': t._id, 'Topic ID': t['Topic ID'], 'Program Name': p['Program Name'] || '', Topic: p.Topic || '', Task: t.Task,
+          _id: uid(), 'Item Type': item.kind, 'Task ID': item.id, 'Topic ID': item.topicId, 'Program Name': item.program, Topic: item.topic, Task: item.title,
           Person: person, 'Start Date': c.from, 'End Date': c.to, 'Hours per Day': String(c.hours), 'Include Weekends': $('#tlWeekends', root).checked ? 'Yes' : 'No',
           'Working Days': String(c.days.length), 'Total Hours': String(Math.round(c.days.length * c.hours * 100) / 100), Notes: $('#tlNotes', root).value.trim(),
           'Logged By': settings.name || 'Team member', 'Logged At': new Date().toISOString()
@@ -2265,6 +2298,161 @@
         { action: 'Updated', item: DS[ds].label, details: `Bulk update: ${t.c} set to "${short(t.v, 40)}" on ${t.hit.length} rows (${t.mode === 'all' ? 'replaced' : 'blank cells only'}; ${scope})` });
       toast(`${t.hit.length} rows updated`);
     });
+  }
+
+  // ---------------------------------------------------------------- Content
+  // Content items (decks, workbooks, quizzes, videos…) assigned to a program or topic, each with an owner,
+  // due date and status. Time logged on a content item counts towards utilization like task time.
+  const CONTENT_TYPES = ['Deck / PPT', 'Workbook', 'Facilitator Guide', 'Quiz / Assessment', 'Video', 'Self-paced Module', 'Flyer / Comms', 'Survey Form', 'Job Aid', 'Other'];
+  const CONTENT_STATUS = ['Not Started', 'Drafting', 'In Review', 'Revisions', 'Approved', 'Published', 'On Hold'];
+  function contentInfo(c) {
+    const done = /approved|published/i.test(c.Status || '');
+    const days = daysUntil(c['Due Date']);
+    return { done, days, overdue: !done && days != null && days < 0, soon: !done && days != null && days >= 0 && days <= 7, review: /review/i.test(c.Status || '') };
+  }
+  const contentParent = (c) => state.data.tracker.find((r) => r._id === c['Topic ID']);
+  const contentWhere = (c) => { const p = contentParent(c); return p ? itemTitle('tracker', p) : [c['Program Name'], c.Topic].filter(Boolean).join(' · ') || '—'; };
+  function contentDue(c) {
+    if (!c['Due Date']) return '<span class="row-meta">No due date</span>';
+    const i = contentInfo(c);
+    const when = esc(fmtDate(c['Due Date'], { day: 'numeric', month: 'short' }));
+    if (i.done) return `<span class="row-meta">Due ${when}</span>`;
+    if (i.days < 0) return `<span class="days crit">Due ${when} · ${-i.days}d overdue</span>`;
+    if (i.days === 0) return '<span class="days warn">Due today</span>';
+    return `<span class="days ${i.days <= 7 ? 'warn' : 'muted'}">Due ${when} · ${i.days}d</span>`;
+  }
+  const safeLink = (u) => (/^https?:\/\//i.test(String(u || '').trim()) ? String(u).trim() : '');
+
+  // What a time entry is attached to: a task or a content item.
+  function timeItem(id) {
+    const t = state.data.tasks.find((x) => x._id === id);
+    if (t) { const p = parentOf(t) || t; return { id, kind: 'Task', title: t.Task, owner: t.Owner, topicId: t['Topic ID'] || '', program: p['Program Name'] || '', topic: p.Topic || '', where: itemTitle('tracker', p) }; }
+    const c = state.data.content.find((x) => x._id === id);
+    if (c) { const p = contentParent(c); return { id, kind: 'Content', title: c['Content Title'], owner: c.Owner, topicId: c['Topic ID'] || '', program: (p && p['Program Name']) || c['Program Name'] || '', topic: (p && p.Topic) || c.Topic || '', where: 'Content · ' + contentWhere(c) }; }
+    return null;
+  }
+
+  function renderContent(el) {
+    const f = state.filters.content;
+    const all = state.data.content;
+    const opts = (vals, sel, label) => `<option value="">${label}</option>` + vals.map((v) => `<option ${v === sel ? 'selected' : ''}>${esc(v)}</option>`).join('');
+    const open = all.filter((c) => !contentInfo(c).done);
+    const t = todayDate();
+    const monthHours = state.data.timelog.filter((e) => e['Item Type'] === 'Content').reduce((s, e) => {
+      const per = num(e['Hours per Day']) || 0;
+      return s + entryDates(e['Start Date'], e['End Date'], e['Include Weekends'] === 'Yes').filter((d) => +d.slice(0, 4) === t.getFullYear() && +d.slice(5, 7) === t.getMonth() + 1).length * per;
+    }, 0);
+    el.innerHTML = `
+      <div class="grid kpis">
+        ${kpiCard('Open items', open.length, `${all.length} in total`, 'var(--navy-800)')}
+        ${kpiCard('Overdue', open.filter((c) => contentInfo(c).overdue).length, 'due date passed, not approved', 'var(--crit)')}
+        ${kpiCard('Due in 7 days', open.filter((c) => contentInfo(c).soon).length, 'coming up this week', 'var(--warn)')}
+        ${kpiCard('In review', open.filter((c) => contentInfo(c).review).length, 'waiting for feedback', 'var(--primary)')}
+        ${kpiCard('Approved / Published', all.length - open.length, 'ready to use', 'var(--good)')}
+        ${kpiCard('Hours this month', fmtH(monthHours), 'logged on content', 'var(--teal-400)')}
+      </div>
+      <div class="toolbar section">
+        <input class="input search" id="ctSearch" type="search" placeholder="Search content, notes…" value="${esc(f.q || '')}" aria-label="Search content">
+        <select class="select" id="ctProgram" aria-label="Program">${opts(uniq(all.map((c) => (contentParent(c) || c)['Program Name'])).sort(), f.program, 'All programs')}</select>
+        <select class="select" id="ctType" aria-label="Type">${opts(CONTENT_TYPES, f.type, 'All types')}</select>
+        <select class="select" id="ctStatus" aria-label="Status"><option value="">Any status</option><option value="open" ${f.status === 'open' ? 'selected' : ''}>Open (not approved)</option>${CONTENT_STATUS.map((s) => `<option ${s === f.status ? 'selected' : ''}>${s}</option>`).join('')}</select>
+        <select class="select" id="ctOwner" aria-label="Owner">${opts(uniq(all.map((c) => c.Owner)).sort(), f.owner, 'All owners')}</select>
+        <label class="check"><input type="checkbox" id="ctMine" ${f.mine ? 'checked' : ''}> Only mine</label>
+        <span class="spacer"></span>
+        <button class="btn accent" id="ctAdd" type="button">+ Add content</button>
+      </div>
+      <div id="ctResults"></div>`;
+    const bind = (id, key, ev) => $(id, el).addEventListener(ev || 'change', (e) => { f[key] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; drawContentTable(); });
+    bind('#ctSearch', 'q', 'input'); bind('#ctProgram', 'program'); bind('#ctType', 'type'); bind('#ctStatus', 'status'); bind('#ctOwner', 'owner'); bind('#ctMine', 'mine');
+    $('#ctAdd', el).addEventListener('click', () => openContentModal(null));
+    drawContentTable();
+  }
+  function drawContentTable() {
+    const box = $('#ctResults');
+    if (!box) return;
+    const f = state.filters.content;
+    const q = norm(f.q), me = norm(settings.name);
+    const rows = state.data.content.filter((c) => {
+      const i = contentInfo(c), p = contentParent(c) || c;
+      if (f.program && p['Program Name'] !== f.program) return false;
+      if (f.type && c['Content Type'] !== f.type) return false;
+      if (f.status === 'open' ? i.done : f.status && c.Status !== f.status) return false;
+      if (f.owner && c.Owner !== f.owner) return false;
+      if (f.mine && !(me && splitPeople(c.Owner).some((o) => norm(o) === me))) return false;
+      if (q && ![c['Content Title'], c.Notes, c.Owner, c['Content Type'], p['Program Name'], p.Topic].some((v) => norm(v).includes(q))) return false;
+      return true;
+    });
+    state.currentRows = { ds: 'content', rows };
+    if (!state.data.content.length) {
+      box.innerHTML = `<div class="card">${emptyBox('No content items yet', ' Click + Add content to track a deck, workbook, quiz or video: who owns it, when it\'s due, and the time spent on it.')}</div>`;
+      return;
+    }
+    drawTable(box, 'content', rows, [
+      { k: 'Due Date', label: 'Due', w: 'nowrap', fmt: contentDue, sortVal: (c) => c['Due Date'] || '9999' },
+      { k: 'Content Title', label: 'Content', w: 'topic', fmt: (c) => `<b>${esc(c['Content Title'])}</b>${safeLink(c.Link) ? ` <a class="link-ic" href="${esc(safeLink(c.Link))}" target="_blank" rel="noopener noreferrer" title="Open the file">Open ↗</a>` : ''}` },
+      { k: 'Content Type', label: 'Type', w: 'nowrap' },
+      { k: '_where', label: 'Program / Topic', w: 'topic', fmt: (c) => esc(contentWhere(c)), sortVal: contentWhere },
+      { k: 'Owner', w: 'nowrap' },
+      { k: 'Status', w: 'nowrap', fmt: (c) => inlineSelect(c, 'Status', 'content') },
+      { k: '_hours', label: 'Time Spent', w: 'nowrap', fmt: (c) => timeChip(c), sortVal: (c) => taskHours(c._id) },
+      { k: 'Notes', w: 'wrap' }
+    ]);
+  }
+
+  function openContentModal(id) {
+    const existing = id ? state.data.content.find((c) => c._id === id) : null;
+    const c = existing ? Object.assign({}, existing) : { _id: uid(), Status: 'Not Started', 'Content Type': 'Deck / PPT', Owner: settings.name || '' };
+    const topics = state.data.tracker.slice().sort((a, b) => itemTitle('tracker', a).localeCompare(itemTitle('tracker', b)));
+    const programs = uniq(state.data.tracker.map((r) => r['Program Name']).concat(state.data.content.map((x) => x['Program Name']))).sort();
+    const sel = (key, list) => `<select class="select" data-cf="${key}">${list.map((o) => `<option ${o === c[key] ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+    const m = openModal(`
+      <div class="modal-head"><div><h2>${existing ? 'Edit Content' : 'Add Content'}</h2>${existing ? `<div class="note">${esc(contentWhere(existing))}</div>` : ''}</div>
+        <button class="icon-btn" data-close type="button" aria-label="Close">✕</button></div>
+      <div class="modal-body"><div class="form-grid">
+        <label class="field wide">Content title<input class="input" data-cf="Content Title" value="${esc(c['Content Title'] || '')}" maxlength="200" placeholder="e.g. M4 Call Handling deck"></label>
+        <label class="field">Type${sel('Content Type', CONTENT_TYPES)}</label>
+        <label class="field">Status${sel('Status', CONTENT_STATUS)}</label>
+        <label class="field wide">Program / topic<select class="select" data-cf="Topic ID"><option value="">No specific topic (choose a program below)</option>${topics.map((r) => `<option value="${esc(r._id)}" ${r._id === c['Topic ID'] ? 'selected' : ''}>${esc(itemTitle('tracker', r))}</option>`).join('')}</select></label>
+        <label class="field" data-progwrap>Program<input class="input" data-cf="Program Name" value="${esc(c['Program Name'] || '')}" list="ctProgs" autocomplete="off"><datalist id="ctProgs">${programs.map((p) => `<option value="${esc(p)}">`).join('')}</datalist></label>
+        <label class="field">Owner<input class="input" data-cf="Owner" value="${esc(c.Owner || '')}" list="ctOwners" autocomplete="off"><datalist id="ctOwners">${teamNames().map((n) => `<option value="${esc(n)}">`).join('')}</datalist></label>
+        <label class="field">Start date<input class="input" type="date" data-cf="Start Date" value="${esc(c['Start Date'] || '')}"></label>
+        <label class="field">Due date<input class="input" type="date" data-cf="Due Date" value="${esc(c['Due Date'] || '')}"></label>
+        <label class="field wide">Link to the file (optional)<input class="input" data-cf="Link" value="${esc(c.Link || '')}" placeholder="https://…"></label>
+        <label class="field wide">Notes<textarea class="input" data-cf="Notes" placeholder="Scope, reviewer, feedback to address…">${esc(c.Notes || '')}</textarea></label>
+      </div></div>
+      <div class="modal-foot"><span class="left">${existing && existing._updatedAt ? `Last updated by ${esc(existing._updatedBy || 'someone')} · ${esc(fmtWhen(existing._updatedAt))}` : ''}</span>
+        ${existing ? '<button class="btn danger" id="cmDel" type="button">Delete</button><button class="btn" id="cmTime" type="button">Log time</button>' : ''}
+        <button class="btn" data-close type="button">Cancel</button><button class="btn primary" id="cmSave" type="button">${existing ? 'Save' : 'Add'}</button></div>`);
+    const topicSel = $('[data-cf="Topic ID"]', m);
+    const toggleProg = () => { $('[data-progwrap]', m).hidden = !!topicSel.value; };
+    topicSel.addEventListener('change', toggleProg);
+    toggleProg();
+    const collect = () => {
+      const out = Object.assign({}, c);
+      $$('[data-cf]', m).forEach((i) => { out[i.dataset.cf] = i.value.trim(); });
+      const p = state.data.tracker.find((r) => r._id === out['Topic ID']);
+      if (p) { out['Program Name'] = p['Program Name'] || ''; out.Topic = p.Topic || ''; } else out.Topic = '';
+      if (!out['Created By']) { out['Created By'] = settings.name || 'Team member'; out['Created At'] = new Date().toISOString(); }
+      return out;
+    };
+    $('#cmSave', m).addEventListener('click', async () => {
+      const out = collect();
+      if (!out['Content Title']) { $('[data-cf="Content Title"]', m).focus(); return toast('Give the content a title', true); }
+      if (out.Link && !safeLink(out.Link)) return toast('The link should start with https://', true);
+      closeModal();
+      await commit('content', 'upsert', { row: out });
+      toast(existing ? 'Content saved' : 'Content added');
+    });
+    if (existing) {
+      $('#cmTime', m).addEventListener('click', () => openTimeLog(existing._id, () => {}));
+      $('#cmDel', m).addEventListener('click', async () => {
+        const n = timeFor(existing._id).length;
+        if (!(await confirmDelete({ title: 'Delete this content item?', lines: [`"${existing['Content Title']}" will be removed for the whole team.`].concat(n ? [`Its ${n} time entr${n === 1 ? 'y stays' : 'ies stay'} in the time log.`] : []) }))) return;
+        closeModal();
+        await commit('content', 'delete', { id: existing._id });
+        toast('Content deleted. You can restore it from the Activity Log.');
+      });
+    }
   }
 
   // ---------------------------------------------------------------- Tasks page

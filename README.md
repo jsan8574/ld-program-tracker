@@ -30,6 +30,8 @@ The tabs (Program Tracker, Tasks & Logistics, Attendance, Assessments, Training 
 
 **Time log and utilization.** Tasks have a clock button for logging time: who, from and to dates, and hours per day. Totals count Mon–Fri unless "Include weekends" is ticked. Entries are stored in the **Time Log** tab. Program Delivery's **Team Utilization** compares logged hours with 8 hours per working day.
 
+**Content.** The Content page tracks each content item: title, type, program or topic, owner, status, start and due dates, and a file link. Items are stored in the **Content** tab. Time logged on content (Item Type = Content in **Time Log**) counts toward Team Utilization.
+
 **If you change Code.gs later**, go to **Deploy → Manage deployments → Edit → Version: New version**. This keeps the same URL.
 
 ## Running without the shared sheet

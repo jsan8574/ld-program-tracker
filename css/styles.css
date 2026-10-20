@@ -571,3 +571,14 @@ table.data .t-check { margin: 0; }
 .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--teal-400); border-right-color: var(--sky-400); animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+
+/* ---------- Sync window & content ---------- */
+.sync-mini { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 110; display: flex; align-items: center; gap: 10px;
+  max-width: min(520px, calc(100vw - 32px)); padding: 9px 14px; border-radius: 12px; background: var(--navy-800); color: #fff; font-size: 13px; font-weight: 500;
+  box-shadow: var(--shadow-lg); border-left: 4px solid var(--teal-400); animation: fade .15s ease-out; }
+.sync-mini.warn { background: #3b2a06; border-left-color: var(--warn); }
+.sync-mini[hidden] { display: none; }
+.spinner.sm { width: 16px; height: 16px; border-width: 2px; flex: none; }
+.sync-mini.warn .spinner { border-top-color: var(--warn); border-right-color: var(--warn); }
+.link-ic { font-size: 12px; font-weight: 600; margin-left: 6px; text-decoration: none; white-space: nowrap; }
+.link-ic:hover { text-decoration: underline; }
