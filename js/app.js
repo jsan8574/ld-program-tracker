@@ -136,9 +136,9 @@
     },
     content: {
       label: 'Content', sheet: 'Content', noun: 'content item',
-      columns: ['Content Title', 'Content Type', 'Program Name', 'Topic', 'Topic ID', 'Owner', 'Status', 'Start Date', 'Due Date', 'Link', 'Notes', 'Created By', 'Created At'],
+      columns: ['Content Title', 'Content Type', 'Program Name', 'Topic', 'Topic ID', 'Owner', 'Status', 'Start Date', 'Due Date', 'SharePoint Link', 'Canva Link', 'Course Link', 'Notes', 'Created By', 'Created At'],
       dates: ['Start Date', 'Due Date'], long: ['Notes'],
-      options: { 'Content Type': ['Deck / PPT', 'Workbook', 'Facilitator Guide', 'Quiz / Assessment', 'Video', 'Self-paced Module', 'Flyer / Comms', 'Survey Form', 'Job Aid', 'Other'],
+      options: { 'Content Type': ['Deck / PPT', 'Workbook', 'Facilitator Guide', 'Quiz / Assessment', 'Video', 'Self-paced Course', 'Flyer / Comms', 'Survey Form', 'Job Aid', 'Other'],
         Status: ['Not Started', 'Drafting', 'In Review', 'Revisions', 'Approved', 'Published', 'On Hold'] },
       title: (r) => r['Content Title'] || ''
     },
@@ -2303,7 +2303,7 @@
   // ---------------------------------------------------------------- Content
   // Content items (decks, workbooks, quizzes, videos…) assigned to a program or topic, each with an owner,
   // due date and status. Time logged on a content item counts towards utilization like task time.
-  const CONTENT_TYPES = ['Deck / PPT', 'Workbook', 'Facilitator Guide', 'Quiz / Assessment', 'Video', 'Self-paced Module', 'Flyer / Comms', 'Survey Form', 'Job Aid', 'Other'];
+  const CONTENT_TYPES = ['Deck / PPT', 'Workbook', 'Facilitator Guide', 'Quiz / Assessment', 'Video', 'Self-paced Course', 'Flyer / Comms', 'Survey Form', 'Job Aid', 'Other'];
   const CONTENT_STATUS = ['Not Started', 'Drafting', 'In Review', 'Revisions', 'Approved', 'Published', 'On Hold'];
   function contentInfo(c) {
     const done = /approved|published/i.test(c.Status || '');
@@ -2322,6 +2322,14 @@
     return `<span class="days ${i.days <= 7 ? 'warn' : 'muted'}">Due ${when} · ${i.days}d</span>`;
   }
   const safeLink = (u) => (/^https?:\/\//i.test(String(u || '').trim()) ? String(u).trim() : '');
+  // Items saved before the two link fields existed kept their link in "Link"; treat it as the SharePoint link.
+  const spLink = (c) => safeLink(c['SharePoint Link'] || c.Link);
+  function contentLinks(c) {
+    const sp = spLink(c), cv = safeLink(c['Canva Link']), co = safeLink(c['Course Link']);
+    return (sp ? `<a class="link-btn-sm sp" href="${esc(sp)}" target="_blank" rel="noopener noreferrer" title="Open in SharePoint">SharePoint ↗</a>` : '')
+      + (cv ? `<a class="link-btn-sm cv" href="${esc(cv)}" target="_blank" rel="noopener noreferrer" title="Open in Canva">Canva ↗</a>` : '')
+      + (co ? `<a class="link-btn-sm co" href="${esc(co)}" target="_blank" rel="noopener noreferrer" title="Open the self-paced course">Course ↗</a>` : '');
+  }
 
   // What a time entry is attached to: a task or a content item.
   function timeItem(id) {
@@ -2389,7 +2397,8 @@
     }
     drawTable(box, 'content', rows, [
       { k: 'Due Date', label: 'Due', w: 'nowrap', fmt: contentDue, sortVal: (c) => c['Due Date'] || '9999' },
-      { k: 'Content Title', label: 'Content', w: 'topic', fmt: (c) => `<b>${esc(c['Content Title'])}</b>${safeLink(c.Link) ? ` <a class="link-ic" href="${esc(safeLink(c.Link))}" target="_blank" rel="noopener noreferrer" title="Open the file">Open ↗</a>` : ''}` },
+      { k: 'Content Title', label: 'Content', w: 'topic', fmt: (c) => `<b>${esc(c['Content Title'])}</b>` },
+      { k: '_links', label: 'Files', w: 'nowrap', fmt: (c) => contentLinks(c) || '<span class="row-meta">No link yet</span>', sortVal: (c) => (spLink(c) || c['Canva Link'] || c['Course Link'] ? 0 : 1) },
       { k: 'Content Type', label: 'Type', w: 'nowrap' },
       { k: '_where', label: 'Program / Topic', w: 'topic', fmt: (c) => esc(contentWhere(c)), sortVal: contentWhere },
       { k: 'Owner', w: 'nowrap' },
@@ -2406,7 +2415,7 @@
     const programs = uniq(state.data.tracker.map((r) => r['Program Name']).concat(state.data.content.map((x) => x['Program Name']))).sort();
     const sel = (key, list) => `<select class="select" data-cf="${key}">${list.map((o) => `<option ${o === c[key] ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
     const m = openModal(`
-      <div class="modal-head"><div><h2>${existing ? 'Edit Content' : 'Add Content'}</h2>${existing ? `<div class="note">${esc(contentWhere(existing))}</div>` : ''}</div>
+      <div class="modal-head"><div><h2>${existing ? 'Edit Content' : 'Add Content'}</h2>${existing ? `<div class="note">${esc(contentWhere(existing))} ${contentLinks(existing)}</div>` : ''}</div>
         <button class="icon-btn" data-close type="button" aria-label="Close">✕</button></div>
       <div class="modal-body"><div class="form-grid">
         <label class="field wide">Content title<input class="input" data-cf="Content Title" value="${esc(c['Content Title'] || '')}" maxlength="200" placeholder="e.g. M4 Call Handling deck"></label>
@@ -2417,7 +2426,10 @@
         <label class="field">Owner<input class="input" data-cf="Owner" value="${esc(c.Owner || '')}" list="ctOwners" autocomplete="off"><datalist id="ctOwners">${teamNames().map((n) => `<option value="${esc(n)}">`).join('')}</datalist></label>
         <label class="field">Start date<input class="input" type="date" data-cf="Start Date" value="${esc(c['Start Date'] || '')}"></label>
         <label class="field">Due date<input class="input" type="date" data-cf="Due Date" value="${esc(c['Due Date'] || '')}"></label>
-        <label class="field wide">Link to the file (optional)<input class="input" data-cf="Link" value="${esc(c.Link || '')}" placeholder="https://…"></label>
+        <label class="field wide">SharePoint link (where the file is saved)<input class="input" data-cf="SharePoint Link" value="${esc(c['SharePoint Link'] || c.Link || '')}" placeholder="https://yourcompany.sharepoint.com/…">
+          <span class="note">Paste the SharePoint share link so anyone in the team can open it for review.</span></label>
+        <label class="field wide">Canva link (for flyers and designs)<input class="input" data-cf="Canva Link" value="${esc(c['Canva Link'] || '')}" placeholder="https://www.canva.com/design/…"></label>
+        <label class="field wide">Course link (for self-paced courses)<input class="input" data-cf="Course Link" value="${esc(c['Course Link'] || '')}" placeholder="https://… where learners take the course"></label>
         <label class="field wide">Notes<textarea class="input" data-cf="Notes" placeholder="Scope, reviewer, feedback to address…">${esc(c.Notes || '')}</textarea></label>
       </div></div>
       <div class="modal-foot"><span class="left">${existing && existing._updatedAt ? `Last updated by ${esc(existing._updatedBy || 'someone')} · ${esc(fmtWhen(existing._updatedAt))}` : ''}</span>
@@ -2438,7 +2450,8 @@
     $('#cmSave', m).addEventListener('click', async () => {
       const out = collect();
       if (!out['Content Title']) { $('[data-cf="Content Title"]', m).focus(); return toast('Give the content a title', true); }
-      if (out.Link && !safeLink(out.Link)) return toast('The link should start with https://', true);
+      for (const k of ['SharePoint Link', 'Canva Link', 'Course Link']) if (out[k] && !safeLink(out[k])) return toast(`The ${k.replace(' Link', '')} link should start with https://`, true);
+      delete out.Link;
       closeModal();
       await commit('content', 'upsert', { row: out });
       toast(existing ? 'Content saved' : 'Content added');
