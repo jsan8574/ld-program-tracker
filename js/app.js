@@ -544,10 +544,11 @@
   function renderNav() {
     const open = state.data.announcements.filter((a) => a.Status !== 'Addressed').length;
     const lateTasks = state.data.tasks.filter((t) => taskInfo(t).overdue).length;
+    const mism = { assessments: issuesFor('assessments').length, survey: issuesFor('survey').length };
     $('#nav').innerHTML = NAV_ORDER.map((k) => k === 'sep' ? '<div class="nav-sep"></div>' :
       `<button class="nav-btn ${state.view === k ? 'active' : ''}" data-view="${k}" type="button" ${state.view === k ? 'aria-current="page"' : ''}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[k]}</svg>
-        ${esc(VIEWS[k].nav)}${k === 'announcements' && open ? `<span class="count">${open}</span>` : ''}${k === 'tasks' && lateTasks ? `<span class="count crit" title="Overdue tasks">${lateTasks}</span>` : ''}</button>`).join('');
+        ${esc(VIEWS[k].nav)}${k === 'announcements' && open ? `<span class="count">${open}</span>` : ''}${k === 'tasks' && lateTasks ? `<span class="count crit" title="Overdue tasks">${lateTasks}</span>` : ''}${mism[k] ? `<span class="count warnc" title="Records that don't match attendance">${mism[k]}</span>` : ''}</button>`).join('');
     $('#mobileNav').innerHTML = NAV_ORDER.filter((k) => k !== 'sep').map((k) => `<button type="button" data-view="${k}" class="${state.view === k ? 'active' : ''}">${esc(VIEWS[k].nav)}${k === 'announcements' && open ? ` (${open})` : ''}</button>`).join('');
     $('#whoName').textContent = settings.name ? settings.name : '';
     $('#btnSettings').hidden = !isAdmin();
@@ -856,7 +857,7 @@
       <div class="level-tag"><span>Level ${n}</span>${name}</div><div class="level-q">${q}</div>
       <div class="value">${value}${unit ? `<small>${unit}</small>` : ''}</div><div class="hint">${hint}</div></div>`;
 
-    let html = overviewFilterBar(sc, 'impact');
+    let html = overviewFilterBar(sc, 'impact') + issueAlert('impact');
     html += `<div class="grid kpis">
       ${kpiCard('Sessions delivered', s.delivered, `of ${s.planned} planned`, 'var(--navy-800)')}
       ${kpiCard('Learners trained', fmtNum(s.learners), `${fmtNum(s.attendances)} attendances`, 'var(--primary)')}
@@ -889,6 +890,7 @@
     </div>`;
     el.innerHTML = html;
     wireOverviewFilters(el);
+    wireIssueAlert(el, 'impact', () => render());
     drawBreakdown(sc);
     $$('[data-dim]', el).forEach((b) => b.addEventListener('click', () => {
       state.filters.impact.dim = b.dataset.dim;
@@ -1236,6 +1238,101 @@
     return esc(v);
   }
 
+  // ---------------------------------------------------------------- Attendance cross-check
+  // Assessment and survey records must belong to someone who attended: on the program's attendance list and
+  // not marked Absent for that session. Anonymous survey answers can't be checked and are skipped.
+  const personKey = (r) => norm(r.Email) || norm(r['Calling Name'] || r.Name);
+  const progKey = (v) => norm(String(v || '').split(' (')[0]);
+  const isAbsent = (r) => norm(r.Attendance) === 'absent';
+  function attendanceIndex() {
+    const idx = new Map();
+    for (const a of state.data.attendance) {
+      const k = personKey(a) + '|' + progKey(a.Program);
+      if (!idx.has(k)) idx.set(k, []);
+      idx.get(k).push(a);
+    }
+    return idx;
+  }
+  function checkRecord(r, ds, idx) {
+    const who = personKey(r);
+    if (!who || who === 'anonymous') return null;
+    const prog = ds === 'survey' ? r['Program Name'] : r.Program;
+    const list = idx.get(who + '|' + progKey(prog)) || [];
+    if (!list.length) return `Not on the ${prog || 'program'} attendance list`;
+    const date = ds === 'survey' ? r['Date Conducted'] : r.Date;
+    const sameDay = date ? list.filter((a) => a.Date === date) : [];
+    if (sameDay.length && sameDay.every(isAbsent)) return `Marked Absent on ${fmtDate(date)}`;
+    if (list.every(isAbsent)) return 'Marked Absent in every session of this program';
+    if (ds === 'assessments' && isAbsent(r) && scoreVal(r.Score) != null) return 'This record says Absent but has a score';
+    return null;
+  }
+  // Every mismatch across assessments and surveys, recalculated whenever the data changes.
+  let checkCache = { stamp: null, list: [] };
+  function discrepancies() {
+    const stamp = [state.data.attendance, state.data.assessments, state.data.survey].map((l) => l.length + ':' + (l.reduce((m, r) => (r._updatedAt > m ? r._updatedAt : m), ''))).join('/');
+    if (checkCache.stamp === stamp) return checkCache.list;
+    const idx = attendanceIndex();
+    const list = [];
+    for (const ds of ['assessments', 'survey']) for (const r of state.data[ds]) { const reason = checkRecord(r, ds, idx); if (reason) list.push({ ds, r, reason }); }
+    checkCache = { stamp, list };
+    return list;
+  }
+  const issuesFor = (ds) => discrepancies().filter((x) => x.ds === ds);
+  function issueAlert(ds) {
+    const all = discrepancies();
+    const mine = ds === 'attendance' || ds === 'impact' ? all : issuesFor(ds);
+    if (!mine.length) return '';
+    const a = all.filter((x) => x.ds === 'assessments').length, sv = all.filter((x) => x.ds === 'survey').length;
+    const what = ds === 'attendance' || ds === 'impact'
+      ? [a ? `${a} assessment record${a === 1 ? '' : 's'}` : '', sv ? `${sv} survey response${sv === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ')
+      : `${mine.length} ${ds === 'survey' ? 'survey response' : 'assessment record'}${mine.length === 1 ? '' : 's'}`;
+    return `<div class="issue-alert" role="alert">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></svg>
+      <div><b>${what} ${mine.length === 1 ? "doesn't" : "don't"} match the attendance list.</b> Someone has a score or survey answer but isn't on the attendance list, or is marked Absent.${ds === 'impact' ? ' Results below may be off until this is fixed.' : ' Fix the attendance or the record.'}</div>
+      <button class="btn sm" type="button" data-issues-review>Review ${mine.length}</button>
+      ${ds === 'assessments' || ds === 'survey' ? `<button class="btn sm ghost" type="button" data-issues-only>${state.filters[ds].issuesOnly ? 'Show all rows' : 'Show only these'}</button>` : ''}
+    </div>`;
+  }
+  function wireIssueAlert(el, ds, redraw) {
+    const r = $('[data-issues-review]', el);
+    if (r) r.addEventListener('click', () => openIssues(ds === 'assessments' || ds === 'survey' ? ds : null));
+    const o = $('[data-issues-only]', el);
+    if (o) o.addEventListener('click', () => { state.filters[ds].issuesOnly = !state.filters[ds].issuesOnly; redraw(); });
+  }
+  function openIssues(onlyDs) {
+    const list = onlyDs ? issuesFor(onlyDs) : discrepancies();
+    const m = openModal(`
+      <div class="modal-head"><div><h2>Attendance Mismatches</h2><div class="note">${list.length} record${list.length === 1 ? '' : 's'} to fix. Correct the attendance (e.g. mark them Present) or fix or delete the record.</div></div><button class="icon-btn" data-close type="button" aria-label="Close">✕</button></div>
+      <div class="modal-body">${list.length ? `<div class="table-wrap" style="max-height:60vh"><table class="data"><thead><tr><th>Person</th><th>Record</th><th>Program</th><th>Date</th><th>Issue</th><th></th></tr></thead><tbody>
+        ${list.map((x) => `<tr style="cursor:default"><td class="nowrap"><b>${esc(x.r['Calling Name'] || x.r.Name || x.r.Email)}</b><div class="row-meta">${esc(x.r.Email || '')}</div></td>
+          <td class="nowrap">${esc(x.ds === 'survey' ? 'Survey response' : x.r['Assessment Type'] || 'Assessment')}</td>
+          <td class="nowrap">${esc(x.ds === 'survey' ? x.r['Program Name'] : x.r.Program)}</td>
+          <td class="nowrap">${esc(fmtDate(x.ds === 'survey' ? x.r['Date Conducted'] : x.r.Date))}</td>
+          <td><span class="pill warn">${esc(x.reason)}</span></td>
+          <td class="nowrap"><button class="btn sm" type="button" data-fix="${esc(x.ds)}|${esc(x.r._id)}">Open record</button>
+            <button class="btn sm ghost" type="button" data-fixatt="${esc(personKey(x.r))}">Their attendance</button></td></tr>`).join('')}
+      </tbody></table></div>` : emptyBox('All matched', ' Every assessment and survey record matches the attendance list.')}</div>
+      <div class="modal-foot"><button class="btn" data-close type="button">Close</button></div>`);
+    $$('[data-fix]', m).forEach((b) => b.addEventListener('click', () => { const [ds, id] = b.dataset.fix.split('|'); closeModal(); openEditor(ds, id); }));
+    $$('[data-fixatt]', m).forEach((b) => b.addEventListener('click', () => {
+      const p = list.find((x) => personKey(x.r) === b.dataset.fixatt).r;
+      closeModal();
+      state.filters.attendance.program = ''; state.filters.attendance.mod = '';
+      go('attendance', { q: p.Email || p['Calling Name'] || p.Name || '' });
+    }));
+  }
+  // Simple yes/no prompt (no typing) for warnings that shouldn't block saving.
+  function askYesNo(title, lines, okLabel) {
+    return new Promise((resolve) => {
+      const root = $('#confirmRoot');
+      root.innerHTML = `<div class="modal-back top"><div class="modal sm" role="alertdialog" aria-modal="true"><div class="modal-head"><h2>${esc(title)}</h2></div>
+        <div class="modal-body"><div class="callout">${lines.map((l) => `<p>${esc(l)}</p>`).join('')}</div></div>
+        <div class="modal-foot"><button class="btn" type="button" data-a="0">Go back</button><button class="btn primary" type="button" data-a="1">${esc(okLabel || 'Save anyway')}</button></div></div></div>`;
+      const finish = (v) => { root.innerHTML = ''; resolve(v); };
+      $$('[data-a]', root).forEach((b) => b.addEventListener('click', () => finish(b.dataset.a === '1')));
+    });
+  }
+
   // ---------------------------------------------------------------- Attendance / Assessments / Survey views
   function renderDataset(el, ds) {
     const d = DS[ds];
@@ -1261,6 +1358,7 @@
       return;
     }
 
+    html += issueAlert(ds);
     if (ds === 'attendance') html += attendanceSection(pre);
     const byProgram = rows.filter((r) => !f.program || r[progCol] === f.program);
     if (ds === 'assessments') { const parts = assessmentSection(pre).split('<!--charts-->'); html += parts[0] + compareSection(byProgram) + parts[1]; }
@@ -1280,6 +1378,7 @@
     $('#dSearch', el).addEventListener('input', (e) => { f.q = e.target.value; drawDsTable(ds, pre); });
     $('#btnAdd', el).addEventListener('click', () => openEditor(ds, null));
     $('#btnBulk', el).addEventListener('click', () => openBulkUpdate(ds));
+    wireIssueAlert(el, ds, () => render());
     // Ticking participants: individual rows, or every row the filters show.
     $('#dTable', el).addEventListener('change', (e) => {
       const sel = state.dsSel[ds];
@@ -1305,13 +1404,16 @@
   function drawDsTable(ds, pre) {
     const f = state.filters[ds];
     const q = norm(f.q);
-    const rows = q ? pre.filter((r) => Object.keys(r).some((k) => k[0] !== '_' && norm(r[k]).includes(q))) : pre;
+    const issueMap = ds === 'assessments' || ds === 'survey' ? new Map(issuesFor(ds).map((x) => [x.r._id, x.reason])) : new Map();
+    let rows = q ? pre.filter((r) => Object.keys(r).some((k) => k[0] !== '_' && norm(r[k]).includes(q))) : pre;
+    if (f.issuesOnly) rows = rows.filter((r) => issueMap.has(r._id));
     state.currentRows = { ds, rows };
     const keys = f.allCols ? columnsFor(ds, state.data[ds]) : DS[ds].tableCols;
+    const issueCol = issueMap.size ? [{ k: '_issue', label: 'Check', w: 'nowrap', fmt: (r) => (issueMap.has(r._id) ? `<span class="pill warn" title="${esc(issueMap.get(r._id))}">Mismatch</span>` : '<span class="row-meta">OK</span>'), sortVal: (r) => (issueMap.has(r._id) ? 0 : 1) }] : [];
     const sel = state.dsSel[ds];
     if (sel) for (const id of Array.from(sel)) if (!state.data[ds].some((r) => r._id === id)) sel.delete(id);
     const selCol = sel ? [{ k: '_sel', label: '✓', w: 'nowrap', fmt: (r) => `<input type="checkbox" class="t-check" data-dsel value="${esc(r._id)}" ${sel.has(r._id) ? 'checked' : ''} aria-label="Select row">`, sortVal: (r) => (sel.has(r._id) ? 0 : 1) }] : [];
-    drawTable($('#dTable'), ds, rows, selCol.concat(keys.map((k) => ({ k, w: DS[ds].long.includes(k) ? 'wrap' : 'nowrap' }))));
+    drawTable($('#dTable'), ds, rows, selCol.concat(issueCol, keys.map((k) => ({ k, w: DS[ds].long.includes(k) ? 'wrap' : 'nowrap' }))));
     if (sel) {
       const th = $('#dTable th[data-sort="_sel"]');
       if (th) { th.innerHTML = `<input type="checkbox" class="t-check" data-dselall aria-label="Select all rows shown" ${rows.length && rows.every((r) => sel.has(r._id)) ? 'checked' : ''}>`; th.addEventListener('click', (e) => { if (e.target.matches('[data-dselall]')) e.stopImmediatePropagation(); }, true); }
@@ -1552,6 +1654,10 @@
     $$('[data-etab]', m).forEach((b) => b.addEventListener('click', () => showTab(b.dataset.etab)));
     $('#edSave', m).addEventListener('click', async () => {
       const out = collect();
+      if (ds === 'assessments' || ds === 'survey') {
+        const reason = checkRecord(out, ds, attendanceIndex());
+        if (reason && !(await askYesNo('Not in the attendance list', [`${out['Calling Name'] || out.Name || out.Email || 'This person'}: ${reason}.`, 'Scores and survey answers should only exist for people who attended. Fix the attendance first, or save anyway and fix it later.']))) return;
+      }
       closeModal();
       await commit(ds, 'upsert', { row: out });
       toast(existing ? 'Saved' : 'Added');
@@ -2542,6 +2648,8 @@
         summary.push(`${DS[j.ds].label}: ${final.added} added, ${final.updated} updated${final.removed.length ? `, ${final.removed.length} removed` : ''}${ok ? '' : ' (not synced)'}`);
       }
       toast('Imported. ' + summary.join(' · '));
+      const mism = discrepancies().length;
+      if (mism) setTimeout(() => toast(`${mism} record${mism === 1 ? '' : 's'} don't match the attendance list. Open Assessments or Survey to review.`, true), 600);
       if (jobs.length === 1) go(jobs[0].ds === 'tracker' ? 'tracker' : jobs[0].ds);
     });
   }
