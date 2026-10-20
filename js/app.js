@@ -1250,7 +1250,6 @@
       <select class="select" id="dProg" aria-label="Program">${opts(uniq(rows.map((r) => r[progCol])).sort(), f.program, 'All programs')}</select>
       <select class="select" id="dMod" aria-label="${esc(modCol)}">${opts(uniq(rows.map((r) => r[modCol])).sort(), f.mod, ds === 'assessments' ? 'All assessment types' : 'All modules')}</select>
       <span class="spacer"></span>
-      ${rows.length ? '<button class="btn" id="btnBulk" type="button" title="Set one field on every row the filters show">Bulk update</button>' : ''}
       <button class="btn accent" id="btnAdd" type="button">+ Add ${esc(d.noun)}</button></div>`;
 
     if (!rows.length) {
@@ -1270,7 +1269,8 @@
     html += `<div class="section card"><div class="toolbar" style="margin-bottom:10px">
       <input class="input search" id="dSearch" type="search" placeholder="Search name, email, remarks…" value="${esc(f.q || '')}" aria-label="Search">
       <label class="check"><input type="checkbox" id="dAll" ${f.allCols ? 'checked' : ''}> Show all columns</label>
-      <span class="spacer"></span><span id="dSelInfo" class="sel-info"></span></div>
+      <span class="spacer"></span><span id="dSelInfo" class="sel-info"></span>
+      <button class="btn primary" id="btnBulk" type="button" title="Set one field on the ticked participants, or on every row shown">Bulk update</button></div>
       <div id="dTable"></div></div>`;
     el.innerHTML = html;
 
