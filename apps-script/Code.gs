@@ -65,12 +65,12 @@ function doPost(e) {
     if (APPEND_ONLY[ds] && req.action !== 'append') throw new Error('The activity log can only be added to');
 
     var lock = LockService.getScriptLock();
-    lock.waitLock(20000);
+    lock.waitLock(30000);
     try {
       if (req.action === 'upsert') upsert_(ds, req.row);
-      else if (req.action === 'upsertMany') (req.rows || []).forEach(function (r) { upsert_(ds, r); });
+      else if (req.action === 'upsertMany') upsertMany_(ds, req.rows || []);
       else if (req.action === 'delete') remove_(ds, req.id);
-      else if (req.action === 'deleteMany') (req.ids || []).forEach(function (id) { remove_(ds, id); });
+      else if (req.action === 'deleteMany') removeMany_(ds, req.ids || []);
       else if (req.action === 'replace') replace_(ds, req.rows || []);
       else if (req.action === 'append') append_(ds, req.rows || []);
       else throw new Error('Unknown action: ' + req.action);
@@ -162,6 +162,36 @@ function upsert_(ds, row) {
   var header = ensureColumns_(sh, Object.keys(row));
   var at = findRow_(sh, row._id);
   writeRows_(sh, at > 0 ? at : sh.getLastRow() + 1, [toRow_(header, row)]);
+}
+
+// Batch version of upsert_: reads the id column once instead of once per row.
+function upsertMany_(ds, rows) {
+  if (!rows.length) return;
+  var sh = sheet_(ds);
+  var keys = [];
+  rows.forEach(function (r) { Object.keys(r).forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); }); });
+  var header = ensureColumns_(sh, keys);
+  var last = sh.getLastRow();
+  var pos = {};
+  if (last >= 2) sh.getRange(2, 1, last - 1, 1).getDisplayValues().forEach(function (r, i) { pos[r[0]] = i + 2; });
+  var appends = [];
+  rows.forEach(function (r) {
+    if (!r || !r._id) return;
+    if (pos[r._id]) writeRows_(sh, pos[r._id], [toRow_(header, r)]);
+    else appends.push(toRow_(header, r));
+  });
+  if (appends.length) writeRows_(sh, sh.getLastRow() + 1, appends);
+}
+
+function removeMany_(ds, ids) {
+  var sh = sheet_(ds);
+  var last = sh.getLastRow();
+  if (last < 2 || !ids.length) return;
+  var want = {};
+  ids.forEach(function (id) { want[id] = true; });
+  var rows = [];
+  sh.getRange(2, 1, last - 1, 1).getDisplayValues().forEach(function (r, i) { if (want[r[0]]) rows.push(i + 2); });
+  rows.reverse().forEach(function (n) { sh.deleteRow(n); });
 }
 
 function append_(ds, rows) {

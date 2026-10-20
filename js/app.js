@@ -3,7 +3,7 @@
   'use strict';
 
   const CFG = Object.assign({ apiUrl: '', pollSeconds: 60 }, window.LD_CONFIG || {});
-  const LS = { data: 'ldt.data.v1', settings: 'ldt.settings.v1', view: 'ldt.view.v1', ovFilter: 'ldt.ovfilter.v1' };
+  const LS = { outbox: 'ldt.outbox.v1', data: 'ldt.data.v1', settings: 'ldt.settings.v1', view: 'ldt.view.v1', ovFilter: 'ldt.ovfilter.v1' };
 
   const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } };
   const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } };
@@ -259,7 +259,7 @@
     sort: {},
     trackerMode: 'table',
     sync: { mode: 'local', text: '' },
-    pendingWrites: 0,
+    outbox: lsGet(LS.outbox, []),
     dirty: false,
     currentRows: null
   };
@@ -271,17 +271,29 @@
     state.sync = { mode, text: text || '' };
     const pill = $('#syncPill');
     pill.className = 'sync-pill ' + mode;
-    const label = { local: 'Local only · not shared', ok: 'Database · synced', busy: 'Syncing…', err: 'Sync problem' }[mode] || mode;
+    const waiting = state.outbox ? state.outbox.length : 0;
+    const label = { local: 'Local only · not shared', ok: 'Database · synced', busy: waiting ? `Saving ${waiting}…` : 'Syncing…', err: waiting ? `${waiting} waiting to save` : 'Sync problem' }[mode] || mode;
     $('#syncText').textContent = label;
     pill.title = text || (mode === 'local' ? 'No shared database connected. Data is saved in this browser only.' : '');
   }
 
+  const TIMEOUT_MS = 45000;
   async function api(action, payload) {
-    const res = await fetch(apiUrl(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(Object.assign({ action, key: settings.passcode, by: settings.name }, payload || {}))
-    });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(apiUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(Object.assign({ action, key: settings.passcode, by: settings.name }, payload || {})),
+        signal: ctrl.signal
+      });
+    } catch (e) {
+      throw new Error(e.name === 'AbortError' ? 'The database took too long to respond' : 'Could not connect. Check your internet connection');
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) throw new Error('Server returned ' + res.status);
     let j;
     try { j = await res.json(); } catch (e) { throw new Error('Unexpected reply. Check the web app URL and that access is set to "Anyone".'); }
@@ -293,14 +305,19 @@
     if (!apiUrl()) { setSync('local'); return; }
     if (!quiet) setSync('busy');
     try {
+      if (state.outbox.length) await flush();
+      const seq = writeSeq;
       const j = await api('all');
-      if (state.pendingWrites > 0) return; // a save is in flight; the next poll picks it up
+      // A save finished (or started) while this was loading, so this copy is already out of date.
+      if (seq !== writeSeq || flushing) { setTimeout(() => loadRemote(true), 1500); return; }
       const next = emptyData();
       for (const k of ALL_DS) next[k] = Array.isArray(j.data && j.data[k]) ? j.data[k] : [];
       state.usersUnsupported = !(j.data && Array.isArray(j.data.users));
+      // Changes not saved yet stay visible until they reach the database.
+      for (const item of state.outbox) applyOp(next, item.ds, item.op, item.arg);
       state.data = next;
       persistLocal();
-      setSync('ok', 'Last synced ' + new Date().toLocaleTimeString());
+      if (!state.outbox.length) setSync('ok', 'Last synced ' + new Date().toLocaleTimeString());
       safeRender();
     } catch (e) {
       setSync('err', e.message);
@@ -349,43 +366,79 @@
   async function commit(ds, op, arg, log) {
     let entry = null;
     if (log !== false && ds !== 'activity') entry = log ? makeLog(ds, log.action, log.item, log.details, log.snapshot, log.itemId) : autoLog(ds, op, arg);
-    const list = state.data[ds];
-    if (op === 'upsert') {
-      stamp(arg.row);
-      const i = list.findIndex((r) => r._id === arg.row._id);
-      if (i >= 0) list[i] = arg.row; else list.push(arg.row);
-    } else if (op === 'upsertMany') {
-      for (const row of arg.rows) {
-        stamp(row);
-        const i = list.findIndex((r) => r._id === row._id);
-        if (i >= 0) list[i] = row; else list.push(row);
-      }
-    } else if (op === 'delete') {
-      state.data[ds] = list.filter((r) => r._id !== arg.id);
-    } else if (op === 'deleteMany') {
-      const ids = new Set(arg.ids);
-      state.data[ds] = list.filter((r) => !ids.has(r._id));
-    } else if (op === 'replace') {
-      state.data[ds] = arg.rows;
-    }
+    if (op === 'upsert') stamp(arg.row);
+    if (op === 'upsertMany') arg.rows.forEach(stamp);
+    applyOp(state.data, ds, op, arg);
     if (entry) state.data.activity.push(entry);
     persistLocal();
     render();
     if (!apiUrl()) return true;
-    state.pendingWrites++;
-    setSync('busy');
-    try {
-      await api(op, Object.assign({ dataset: ds }, arg));
-      if (entry) await api('append', { dataset: 'activity', rows: [entry] });
-      setSync('ok', 'Saved ' + new Date().toLocaleTimeString());
-      return true;
-    } catch (e) {
-      setSync('err', e.message);
-      toast('Not saved to the database: ' + e.message, true);
-      return false;
-    } finally {
-      state.pendingWrites--;
+    state.outbox.push({ ds, op, arg });
+    if (entry) state.outbox.push({ ds: 'activity', op: 'append', arg: { rows: [entry] } });
+    saveOutbox();
+    return flush();
+  }
+
+  // Applies one change to a copy of the data (used for new changes and for re-applying unsaved ones).
+  function applyOp(data, ds, op, arg) {
+    const list = data[ds] || (data[ds] = []);
+    if (op === 'upsert' || op === 'upsertMany') {
+      for (const row of op === 'upsert' ? [arg.row] : arg.rows) {
+        const i = list.findIndex((r) => r._id === row._id);
+        if (i >= 0) list[i] = row; else list.push(row);
+      }
+    } else if (op === 'append') {
+      for (const row of arg.rows) if (!list.some((r) => r._id === row._id)) list.push(row);
+    } else if (op === 'delete') {
+      data[ds] = list.filter((r) => r._id !== arg.id);
+    } else if (op === 'deleteMany') {
+      const ids = new Set(arg.ids);
+      data[ds] = list.filter((r) => !ids.has(r._id));
+    } else if (op === 'replace') {
+      data[ds] = arg.rows;
     }
+  }
+
+  // ---------------------------------------------------------------- Save queue
+  // Every change goes into a queue kept in this browser, then is sent in order. If a save fails (slow
+  // connection, database busy), it stays queued and is retried automatically, so nothing is lost or
+  // overwritten by the next refresh.
+  let flushing = null;
+  let writeSeq = 0;
+  let retryTimer = null;
+  const saveOutbox = () => { try { localStorage.setItem(LS.outbox, JSON.stringify(state.outbox)); } catch (e) { /* too large to keep offline */ } };
+  // Errors that a retry won't fix (the server doesn't know this kind of data yet).
+  const isPermanent = (msg) => /Unknown dataset|can only be added|Unknown action|missing _id/i.test(msg);
+  function flush() {
+    if (!apiUrl()) { state.outbox = []; saveOutbox(); return Promise.resolve(true); }
+    if (flushing) return flushing;
+    flushing = (async () => {
+      const stuck = [];
+      let ok = true;
+      while (state.outbox.length) {
+        const item = state.outbox[0];
+        setSync('busy', `Saving ${state.outbox.length} change${state.outbox.length === 1 ? '' : 's'}…`);
+        try {
+          await api(item.op, Object.assign({ dataset: item.ds }, item.arg));
+          state.outbox.shift();
+          writeSeq++;
+        } catch (e) {
+          if (isPermanent(e.message)) { stuck.push(state.outbox.shift()); state.usersUnsupported = true; continue; }
+          ok = false;
+          setSync('err', `${state.outbox.length + stuck.length} change${state.outbox.length + stuck.length === 1 ? '' : 's'} waiting to save. Retrying automatically. (${e.message})`);
+          clearTimeout(retryTimer);
+          retryTimer = setTimeout(() => flush(), 20000);
+          break;
+        }
+        saveOutbox();
+      }
+      state.outbox = stuck.concat(state.outbox);
+      saveOutbox();
+      if (ok && stuck.length) setSync('err', `${stuck.length} change${stuck.length === 1 ? '' : 's'} can't be saved until the database script is updated (see README).`);
+      else if (ok) setSync('ok', 'Saved ' + new Date().toLocaleTimeString());
+      return ok && !stuck.length;
+    })();
+    return flushing.finally(() => { flushing = null; });
   }
 
   // ---------------------------------------------------------------- UI utilities
@@ -2980,7 +3033,9 @@
     });
 
     // Keep everyone's view fresh
-    setInterval(() => { if (apiUrl() && !document.hidden && state.pendingWrites === 0) loadRemote(true); }, Math.max(15, CFG.pollSeconds) * 1000);
+    setInterval(() => { if (apiUrl() && !document.hidden && !flushing) loadRemote(true); }, Math.max(15, CFG.pollSeconds) * 1000);
+    window.addEventListener('online', () => { if (apiUrl()) flush().then(() => loadRemote(true)); });
+    window.addEventListener('beforeunload', (e) => { if (state.outbox.length && !state.usersUnsupported) { e.preventDefault(); e.returnValue = ''; } });
     document.addEventListener('visibilitychange', () => { if (!document.hidden && apiUrl()) loadRemote(true); });
   }
 
@@ -2990,5 +3045,5 @@
   render();
   if (!currentUser()) openSignIn();
   else if (apiUrl() && !settings.passcode) openSignIn(true);
-  if (apiUrl()) loadRemote();
+  if (apiUrl()) loadRemote(); // also sends any changes queued from last time
 })();
