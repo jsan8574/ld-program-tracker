@@ -254,6 +254,7 @@
     data: Object.assign(emptyData(), lsGet(LS.data, {})),
     view: lsGet(LS.view, 'overview'),
     taskSel: new Set(),
+    dsSel: { attendance: new Set(), assessments: new Set(), survey: new Set() },
     filters: { overview: lsGet(LS.ovFilter, {}), impact: { dim: 'designation' }, tracker: {}, tasks: { status: 'open' }, attendance: {}, assessments: {}, survey: {}, announcements: { status: 'Open' }, activity: {} },
     sort: {},
     trackerMode: 'table',
@@ -1268,7 +1269,8 @@
 
     html += `<div class="section card"><div class="toolbar" style="margin-bottom:10px">
       <input class="input search" id="dSearch" type="search" placeholder="Search name, email, remarks…" value="${esc(f.q || '')}" aria-label="Search">
-      <label class="check"><input type="checkbox" id="dAll" ${f.allCols ? 'checked' : ''}> Show all columns</label></div>
+      <label class="check"><input type="checkbox" id="dAll" ${f.allCols ? 'checked' : ''}> Show all columns</label>
+      <span class="spacer"></span><span id="dSelInfo" class="sel-info"></span></div>
       <div id="dTable"></div></div>`;
     el.innerHTML = html;
 
@@ -1278,6 +1280,20 @@
     $('#dSearch', el).addEventListener('input', (e) => { f.q = e.target.value; drawDsTable(ds, pre); });
     $('#btnAdd', el).addEventListener('click', () => openEditor(ds, null));
     $('#btnBulk', el).addEventListener('click', () => openBulkUpdate(ds));
+    // Ticking participants: individual rows, or every row the filters show.
+    $('#dTable', el).addEventListener('change', (e) => {
+      const sel = state.dsSel[ds];
+      if (e.target.matches('[data-dsel]')) {
+        if (e.target.checked) sel.add(e.target.value); else sel.delete(e.target.value);
+        e.target.closest('tr').classList.toggle('is-sel', e.target.checked);
+      } else if (e.target.matches('[data-dselall]')) {
+        const shown = state.currentRows && state.currentRows.ds === ds ? state.currentRows.rows : [];
+        shown.forEach((r) => (e.target.checked ? sel.add(r._id) : sel.delete(r._id)));
+        $$('[data-dsel]', $('#dTable', el)).forEach((c) => { c.checked = e.target.checked; c.closest('tr').classList.toggle('is-sel', e.target.checked); });
+      } else return;
+      drawSelInfo(ds);
+    });
+    $('#dSelInfo', el).addEventListener('click', (e) => { if (e.target.closest('[data-dselclear]')) { state.dsSel[ds].clear(); drawDsTable(ds, pre); } });
     drawDsTable(ds, pre);
 
     if (ds === 'attendance') attendanceCharts(pre);
@@ -1292,7 +1308,22 @@
     const rows = q ? pre.filter((r) => Object.keys(r).some((k) => k[0] !== '_' && norm(r[k]).includes(q))) : pre;
     state.currentRows = { ds, rows };
     const keys = f.allCols ? columnsFor(ds, state.data[ds]) : DS[ds].tableCols;
-    drawTable($('#dTable'), ds, rows, keys.map((k) => ({ k, w: DS[ds].long.includes(k) ? 'wrap' : 'nowrap' })));
+    const sel = state.dsSel[ds];
+    if (sel) for (const id of Array.from(sel)) if (!state.data[ds].some((r) => r._id === id)) sel.delete(id);
+    const selCol = sel ? [{ k: '_sel', label: '✓', w: 'nowrap', fmt: (r) => `<input type="checkbox" class="t-check" data-dsel value="${esc(r._id)}" ${sel.has(r._id) ? 'checked' : ''} aria-label="Select row">`, sortVal: (r) => (sel.has(r._id) ? 0 : 1) }] : [];
+    drawTable($('#dTable'), ds, rows, selCol.concat(keys.map((k) => ({ k, w: DS[ds].long.includes(k) ? 'wrap' : 'nowrap' }))));
+    if (sel) {
+      const th = $('#dTable th[data-sort="_sel"]');
+      if (th) { th.innerHTML = `<input type="checkbox" class="t-check" data-dselall aria-label="Select all rows shown" ${rows.length && rows.every((r) => sel.has(r._id)) ? 'checked' : ''}>`; th.addEventListener('click', (e) => { if (e.target.matches('[data-dselall]')) e.stopImmediatePropagation(); }, true); }
+      $$('#dTable tr[data-edit]').forEach((tr) => tr.classList.toggle('is-sel', sel.has(tr.dataset.edit)));
+      drawSelInfo(ds);
+    }
+  }
+  function drawSelInfo(ds) {
+    const box = $('#dSelInfo');
+    if (!box) return;
+    const n = state.dsSel[ds].size;
+    box.innerHTML = n ? `<b>${n} selected</b> <button class="link-btn" type="button" data-dselclear>Clear</button>` : '<span class="row-meta">Tick participants to bulk update only them</span>';
   }
 
   const kpiCard = (label, value, hint, color) => `<div class="card kpi" style="--kpi-accent:${color || 'var(--primary)'}"><div class="label">${label}</div><div class="value">${value}</div><div class="hint">${hint || ''}</div></div>`;
@@ -2000,15 +2031,21 @@
 
   // Bulk update: set one field on every participant row the current filters show.
   function openBulkUpdate(ds) {
-    const rows = state.currentRows && state.currentRows.ds === ds ? state.currentRows.rows : state.data[ds];
-    if (!rows.length) return toast('No rows match the current filters', true);
+    const shown = state.currentRows && state.currentRows.ds === ds ? state.currentRows.rows : state.data[ds];
+    const selIds = state.dsSel[ds] || new Set();
+    const selected = state.data[ds].filter((r) => selIds.has(r._id));
+    if (!shown.length && !selected.length) return toast('No rows match the current filters', true);
+    let rows = selected.length ? selected : shown;
     const f = state.filters[ds];
     const cols = columnsFor(ds, state.data[ds]);
-    const scope = [f.program, f.mod, f.q ? `search "${f.q}"` : ''].filter(Boolean).join(' · ') || 'all rows';
+    const filterScope = [f.program, f.mod, f.q ? `search "${f.q}"` : ''].filter(Boolean).join(' · ') || 'all rows';
+    let scope = selected.length ? `${selected.length} selected participants` : filterScope;
     const m = openModal(`
-      <div class="modal-head"><div><h2>Bulk Update</h2><div class="note">${rows.length} ${esc(DS[ds].label.toLowerCase())} rows shown (${esc(scope)})</div></div><button class="icon-btn" data-close type="button" aria-label="Close">✕</button></div>
+      <div class="modal-head"><div><h2>Bulk Update</h2><div class="note">${esc(DS[ds].label)}</div></div><button class="icon-btn" data-close type="button" aria-label="Close">✕</button></div>
       <div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr">
-        <p class="note" style="margin:0">Use the Program and Module filters and the search box to choose the rows first, e.g. one program's batch. Then set the value once for all of them.</p>
+        <div class="field">Apply to
+          <label class="check"><input type="radio" name="buScope" value="sel" ${selected.length ? 'checked' : 'disabled'}> Selected participants (${selected.length})${selected.length ? '' : ' <span class="row-meta">· tick rows in the table first</span>'}</label>
+          <label class="check"><input type="radio" name="buScope" value="shown" ${selected.length ? '' : 'checked'}> All ${shown.length} rows shown (${esc(filterScope)})</label></div>
         <label class="field">Field to update<select class="select" id="buCol">${cols.map((c) => `<option>${esc(c)}</option>`).join('')}</select></label>
         <label class="field">New value<span id="buValWrap"></span></label>
         <div class="field">How
@@ -2031,12 +2068,19 @@
     const sum = () => { const t = targets(); $('#buSum', m).innerHTML = t.v ? `Will set <b>${esc(t.c)}</b> to <b>${esc(t.v)}</b> on <b>${t.hit.length}</b> of ${rows.length} rows.` : 'Enter the new value.'; $('#buGo', m).textContent = t.v && t.hit.length ? `Update ${t.hit.length} row${t.hit.length === 1 ? '' : 's'}` : 'Update'; };
     $('#buCol', m).addEventListener('change', () => { valInput(); sum(); });
     $$('input[name=buMode]', m).forEach((r) => r.addEventListener('change', sum));
+    $$('input[name=buScope]', m).forEach((r) => r.addEventListener('change', () => {
+      const useSel = $('input[name=buScope]:checked', m).value === 'sel';
+      rows = useSel ? selected : shown;
+      scope = useSel ? `${selected.length} selected participants` : filterScope;
+      sum();
+    }));
     valInput(); sum();
     $('#buGo', m).addEventListener('click', async () => {
       const t = targets();
       if (!t.v) return $('#buVal', m).focus();
       if (!t.hit.length) return toast('Nothing to change: those rows already have a value', true);
       closeModal();
+      if (state.dsSel[ds]) state.dsSel[ds].clear();
       await commit(ds, 'upsertMany', { rows: t.hit.map((r) => Object.assign({}, r, { [t.c]: t.v })) },
         { action: 'Updated', item: DS[ds].label, details: `Bulk update: ${t.c} set to "${short(t.v, 40)}" on ${t.hit.length} rows (${t.mode === 'all' ? 'replaced' : 'blank cells only'}; ${scope})` });
       toast(`${t.hit.length} rows updated`);
