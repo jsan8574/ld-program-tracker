@@ -134,6 +134,12 @@
       options: { Category: TASK_CATS, Status: TASK_STATUS },
       title: (r) => [r.Task, [r['Program Name'], r.Topic && r.Topic !== '-' ? r.Topic : ''].filter(Boolean).join(' · ')].filter(Boolean).join(' — ')
     },
+    timelog: {
+      label: 'Time Log', sheet: 'Time Log', noun: 'time entry',
+      columns: ['Person', 'Task', 'Program Name', 'Topic', 'Start Date', 'End Date', 'Hours per Day', 'Include Weekends', 'Working Days', 'Total Hours', 'Notes', 'Task ID', 'Topic ID', 'Logged By', 'Logged At'],
+      dates: ['Start Date', 'End Date'], numbers: ['Hours per Day', 'Working Days', 'Total Hours'],
+      title: (r) => `${r.Person || ''} · ${r.Task || ''}`
+    },
     users: {
       label: 'Users', sheet: 'Users', noun: 'user',
       columns: ['Name', 'Role', 'Email'],
@@ -147,7 +153,7 @@
     }
   };
   const IMPORTABLE = ['tracker', 'attendance', 'assessments', 'survey'];
-  const ALL_DS = ['tracker', 'tasks', 'attendance', 'assessments', 'survey', 'announcements', 'users', 'activity'];
+  const ALL_DS = ['tracker', 'tasks', 'timelog', 'attendance', 'assessments', 'survey', 'announcements', 'users', 'activity'];
   for (const k of ALL_DS) { const d = DS[k]; d.dates = d.dates || []; d.datetimes = d.datetimes || []; d.numbers = d.numbers || []; d.long = d.long || []; d.options = d.options || {}; d.ignore = (d.ignore || []).concat(['Last Updated By', 'Last Updated At']); }
 
   // ---------------------------------------------------------------- Dates
@@ -247,6 +253,7 @@
   const state = {
     data: Object.assign(emptyData(), lsGet(LS.data, {})),
     view: lsGet(LS.view, 'overview'),
+    taskSel: new Set(),
     filters: { overview: lsGet(LS.ovFilter, {}), impact: { dim: 'designation' }, tracker: {}, tasks: { status: 'open' }, attendance: {}, assessments: {}, survey: {}, announcements: { status: 'Open' }, activity: {} },
     sort: {},
     trackerMode: 'table',
@@ -697,7 +704,8 @@
     html += `<div class="grid cols-2 section">
       <div class="card"><div class="card-head"><h2>Workload by Owner</h2><span class="sub">Open items each person co-owns</span></div><div class="chart-box" id="ownerBox"><canvas id="chOwner" aria-label="Open items by owner"></canvas></div></div>
       <div class="card"><div class="card-head"><h2>Tasks Needing Attention</h2><span class="sub">Overdue, blocked or due within 7 days</span></div><div class="list" id="attention"></div></div>
-    </div>`;
+    </div>
+    <div class="card section"><div class="card-head"><h2>Team Utilization</h2><span class="sub" id="utSub"></span></div><div id="util"></div></div>`;
     el.innerHTML = html;
     wireOverviewFilters(el);
     monthChart(sc, chartYear);
@@ -753,6 +761,7 @@
     }).join('') + (attention.length > 8 ? `<button class="btn sm ghost" type="button" data-goto="tasks" style="margin-top:8px">See all ${attention.length} on the Tasks page</button>` : '')
       : emptyBox('All on track', ' No overdue, blocked or due-this-week tasks for these filters.');
     $$('[data-task]', el).forEach((n) => { const open = () => openTaskModal(n.dataset.task); n.addEventListener('click', open); n.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); }); });
+    drawUtilization(sc);
     wireCommon(el);
   }
   // ---------------------------------------------------------------- Training Impact dashboard
@@ -1240,6 +1249,7 @@
       <select class="select" id="dProg" aria-label="Program">${opts(uniq(rows.map((r) => r[progCol])).sort(), f.program, 'All programs')}</select>
       <select class="select" id="dMod" aria-label="${esc(modCol)}">${opts(uniq(rows.map((r) => r[modCol])).sort(), f.mod, ds === 'assessments' ? 'All assessment types' : 'All modules')}</select>
       <span class="spacer"></span>
+      ${rows.length ? '<button class="btn" id="btnBulk" type="button" title="Set one field on every row the filters show">Bulk update</button>' : ''}
       <button class="btn accent" id="btnAdd" type="button">+ Add ${esc(d.noun)}</button></div>`;
 
     if (!rows.length) {
@@ -1267,6 +1277,7 @@
     $('#dAll', el).addEventListener('change', (e) => { f.allCols = e.target.checked; drawDsTable(ds, pre); });
     $('#dSearch', el).addEventListener('input', (e) => { f.q = e.target.value; drawDsTable(ds, pre); });
     $('#btnAdd', el).addEventListener('click', () => openEditor(ds, null));
+    $('#btnBulk', el).addEventListener('click', () => openBulkUpdate(ds));
     drawDsTable(ds, pre);
 
     if (ds === 'attendance') attendanceCharts(pre);
@@ -1615,13 +1626,14 @@
     if (!out['Created By']) { out['Created By'] = settings.name || 'Team member'; out['Created At'] = new Date().toISOString(); }
     return out;
   }
-  function taskItem(t) {
+  function taskItem(t, selected) {
     const i = taskInfo(t);
-    return `<div class="task ${i.done ? 'is-done' : ''} ${i.overdue ? 'is-late' : ''}">
+    return `<div class="task ${i.done ? 'is-done' : ''} ${i.overdue ? 'is-late' : ''} ${selected ? 'is-sel' : ''}">
+      <input type="checkbox" class="t-check" data-tsel="${esc(t._id)}" ${selected ? 'checked' : ''} aria-label="Select ${esc(t.Task)}">
       ${inlineSelect(t, 'Status', 'tasks')}
       <div class="t-main" data-tedit="${esc(t._id)}" role="button" tabindex="0">
         <div class="t-name">${esc(t.Task || '(untitled task)')}</div>
-        <div class="t-meta"><span class="cat">${esc(t.Category || 'Other')}</span>${t.Owner ? `<span>${esc(t.Owner)}</span>` : '<span class="row-meta">No owner</span>'}${taskDue(t)}</div>
+        <div class="t-meta"><span class="cat">${esc(t.Category || 'Other')}</span>${t.Owner ? `<span>${esc(t.Owner)}</span>` : '<span class="row-meta">No owner</span>'}${taskDue(t)}${timeChip(t)}</div>
         ${t['Details / Requirements'] ? `<div class="t-details">${esc(t['Details / Requirements'])}</div>` : ''}
       </div>
       <button class="icon-btn" type="button" data-tedit="${esc(t._id)}" aria-label="Edit task">
@@ -1630,8 +1642,10 @@
   }
 
   // The task checklist inside a topic. Every change saves on its own.
-  function renderTaskPanel(box, parent, editId, adding) {
+  function renderTaskPanel(box, parent, editId, adding, selection) {
+    const sel = selection || new Set();
     const tasks = tasksFor(parent._id);
+    for (const id of Array.from(sel)) if (!tasks.some((t) => t._id === id)) sel.delete(id);
     const p = taskProgress(parent._id);
     const seg = (n, cls) => (n > 0 ? `<i class="${cls}" style="flex:${n}"></i>` : '');
     box.innerHTML = `
@@ -1645,13 +1659,17 @@
           <button class="btn sm primary" type="button" data-tadd>+ Add task</button>
         </div>
       </div>
+      ${assignBarHtml(sel)}
       ${adding ? taskForm({ _id: uid(), 'Topic ID': parent._id, Status: 'Not Started', Category: 'Logistics' }, true) : ''}
-      <div class="task-list">${tasks.map((t) => (t._id === editId ? taskForm(t, false) : taskItem(t))).join('') ||
+      <div class="task-list">${tasks.map((t) => (t._id === editId ? taskForm(t, false) : taskItem(t, sel.has(t._id)))).join('') ||
         (adding ? '' : emptyBox('No tasks yet', ' Click Add from checklist to pick this topic\'s activities, or add tasks one by one.'))}</div>`;
-    const redraw = (eid, add) => { renderTaskPanel(box, parent, eid, add); const c = $('#edTaskCount'); if (c) c.textContent = taskCountLabel(parent._id); };
+    const redraw = (eid, add) => { renderTaskPanel(box, parent, eid, add, sel); const c = $('#edTaskCount'); if (c) c.textContent = taskCountLabel(parent._id); };
     box.onclick = async (e) => {
-      const b = e.target.closest('[data-tadd],[data-tedit],[data-tcancel],[data-tsave],[data-tdel],[data-tstd]');
+      const b = e.target.closest('[data-tadd],[data-tedit],[data-tcancel],[data-tsave],[data-tdel],[data-tstd],[data-ttime],[data-assign],[data-selclear]');
       if (!b) return;
+      if (b.hasAttribute('data-ttime')) return openTimeLog(b.dataset.ttime, () => redraw());
+      if (b.hasAttribute('data-selclear')) { sel.clear(); return redraw(); }
+      if (b.hasAttribute('data-assign')) { await assignTasks(sel, $('[data-assignto]', box).value); sel.clear(); return redraw(); }
       if (b.hasAttribute('data-tadd')) return redraw(null, true);
       if (b.hasAttribute('data-tedit')) return redraw(b.dataset.tedit, false);
       if (b.hasAttribute('data-tcancel')) return redraw();
@@ -1676,11 +1694,12 @@
     };
     box.onkeydown = (e) => { if (e.key === 'Enter' && e.target.matches('.t-main')) e.target.click(); };
     box.onchange = async (e) => {
-      const sel = e.target.closest('select[data-inline]');
-      if (!sel) return;
-      const t = state.data.tasks.find((x) => x._id === sel.dataset.id);
+      if (e.target.matches('[data-tsel]')) { if (e.target.checked) sel.add(e.target.dataset.tsel); else sel.delete(e.target.dataset.tsel); return redraw(); }
+      const st = e.target.closest('select[data-inline]');
+      if (!st) return;
+      const t = state.data.tasks.find((x) => x._id === st.dataset.id);
       if (!t) return;
-      await commit('tasks', 'upsert', { row: Object.assign({}, t, { Status: sel.value }) });
+      await commit('tasks', 'upsert', { row: Object.assign({}, t, { Status: st.value }) });
       redraw();
     };
   }
@@ -1789,6 +1808,241 @@
     });
   }
 
+  // ---------------------------------------------------------------- Time log & utilization
+  // Each entry: who worked on a task, from which date to which date, and roughly how many hours per day.
+  // Totals count working days (Mon–Fri) unless the entry includes weekends.
+  const HOURS_PER_DAY = 8; // capacity used for utilization
+  const fmtH = (h) => (h == null ? '–' : (Math.round(h * 100) / 100).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' h');
+  function entryDates(startIso, endIso, weekends) {
+    const a = parseISO(startIso), b = parseISO(endIso || startIso);
+    if (!a || !b || b < a) return [];
+    const out = [];
+    for (const d = new Date(a); d <= b && out.length < 400; d.setDate(d.getDate() + 1)) {
+      const w = d.getDay();
+      if (weekends || (w !== 0 && w !== 6)) out.push(isoLocal(d));
+    }
+    return out;
+  }
+  const timeFor = (taskId) => state.data.timelog.filter((e) => e['Task ID'] === taskId)
+    .sort((a, b) => String(b['Start Date']).localeCompare(String(a['Start Date'])));
+  const entryHours = (e) => num(e['Total Hours']) || 0;
+  const taskHours = (taskId) => timeFor(taskId).reduce((s, e) => s + entryHours(e), 0);
+  const timeChip = (t) => { const h = taskHours(t._id); return `<button type="button" class="time-chip ${h ? 'has' : ''}" data-ttime="${esc(t._id)}" title="Log or view time spent">
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>${h ? fmtH(h) : 'Log time'}</button>`; };
+
+  // Log-time window for one task (stacks above the topic editor).
+  function openTimeLog(taskId, onChange) {
+    const t = state.data.tasks.find((x) => x._id === taskId);
+    if (!t) return;
+    const root = $('#confirmRoot');
+    const entries = timeFor(taskId);
+    const me = currentUser() ? currentUser().Name : settings.name;
+    const names = uniq(usersList().map((u) => u.Name).concat(entries.map((e) => e.Person), [me]));
+    const today = isoLocal(todayDate());
+    const total = entries.reduce((s, e) => s + entryHours(e), 0);
+    root.innerHTML = `<div class="modal-back top"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="tlTitle">
+      <div class="modal-head"><div><h2 id="tlTitle">Time Spent</h2><div class="note">${esc(t.Task)} · ${esc(itemTitle('tracker', parentOf(t) || t))}</div></div>
+        <button class="icon-btn" type="button" data-tl="close" aria-label="Close">✕</button></div>
+      <div class="modal-body">
+        <div class="callout info" style="margin-bottom:12px">Log each stretch of work: <b>from</b> and <b>to</b> dates and the <b>hours per day</b>. Work spread over several days, a few hours a day, is one entry. Totals count working days (Mon–Fri) unless you tick "Include weekends".</div>
+        <div class="form-grid tl-form">
+          <label class="field">Who worked on it<select class="select" id="tlPerson">${names.map((n) => `<option ${n === (t.Owner && names.includes(t.Owner) ? t.Owner : me) ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+          <label class="field">Hours per day<input class="input" id="tlHours" type="number" min="0.25" max="24" step="0.25" value="1"></label>
+          <label class="field">From<input class="input" id="tlFrom" type="date" value="${today}"></label>
+          <label class="field">To<input class="input" id="tlTo" type="date" value="${today}"></label>
+          <label class="field wide">Notes (optional)<input class="input" id="tlNotes" maxlength="200" placeholder="e.g. drafting slides, venue calls"></label>
+          <label class="check wide"><input type="checkbox" id="tlWeekends"> Include weekends</label>
+        </div>
+        <div class="tl-sum" id="tlSum"></div>
+        <div style="display:flex;justify-content:flex-end;margin-top:8px"><button class="btn primary" type="button" data-tl="add">Add time</button></div>
+        <div class="form-group-title">Logged so far · ${fmtH(total)}</div>
+        ${entries.length ? `<div class="table-wrap" style="max-height:240px;margin-top:8px"><table class="data"><thead><tr><th>Person</th><th>Dates</th><th>Per Day</th><th>Days</th><th>Total</th><th>Notes</th><th></th></tr></thead><tbody>
+          ${entries.map((e) => `<tr style="cursor:default"><td class="nowrap">${esc(e.Person)}</td>
+            <td class="nowrap">${esc(fmtDate(e['Start Date'], { day: 'numeric', month: 'short' }))}${e['End Date'] && e['End Date'] !== e['Start Date'] ? ' – ' + esc(fmtDate(e['End Date'], { day: 'numeric', month: 'short' })) : ''}</td>
+            <td class="nowrap">${fmtH(num(e['Hours per Day']))}</td><td>${esc(e['Working Days'])}${e['Include Weekends'] === 'Yes' ? ' <span class="row-meta">incl. weekends</span>' : ''}</td>
+            <td class="nowrap"><b>${fmtH(entryHours(e))}</b></td><td>${esc(e.Notes || '')}</td>
+            <td><button class="btn sm ghost danger" type="button" data-tl="del" data-id="${esc(e._id)}">Delete</button></td></tr>`).join('')}
+        </tbody></table></div>` : '<p class="note">No time logged yet.</p>'}
+      </div>
+      <div class="modal-foot"><button class="btn" type="button" data-tl="close">Done</button></div></div></div>`;
+    const finish = () => { root.innerHTML = ''; document.removeEventListener('keydown', onKey, true); if (onChange) onChange(); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); finish(); } };
+    document.addEventListener('keydown', onKey, true);
+    const calc = () => {
+      const from = $('#tlFrom', root).value, to = $('#tlTo', root).value || from;
+      const hours = num($('#tlHours', root).value);
+      const days = entryDates(from, to, $('#tlWeekends', root).checked);
+      const box = $('#tlSum', root);
+      if (!from || (to && parseISO(to) < parseISO(from))) { box.innerHTML = '<span class="days crit">The "To" date must be on or after "From".</span>'; return null; }
+      if (!days.length) { box.innerHTML = '<span class="days crit">No working days in this range. Tick "Include weekends" if you worked on a weekend.</span>'; return null; }
+      if (!hours || hours <= 0 || hours > 24) { box.innerHTML = '<span class="days crit">Enter hours per day between 0.25 and 24.</span>'; return null; }
+      box.innerHTML = `<b>${days.length}</b> day${days.length === 1 ? '' : 's'} × <b>${fmtH(hours)}</b> per day = <b>${fmtH(days.length * hours)}</b> total`;
+      return { from, to, hours, days };
+    };
+    $$('#tlFrom,#tlTo,#tlHours,#tlWeekends', root).forEach((i) => i.addEventListener('input', calc));
+    $('#tlWeekends', root).addEventListener('change', calc);
+    calc();
+    root.firstElementChild.addEventListener('mousedown', (e) => { if (e.target === root.firstElementChild) finish(); });
+    $$('[data-tl]', root).forEach((b) => b.addEventListener('click', async () => {
+      const k = b.dataset.tl;
+      if (k === 'close') return finish();
+      if (k === 'add') {
+        const c = calc();
+        if (!c) return;
+        const p = parentOf(t) || t;
+        const person = $('#tlPerson', root).value;
+        const row = {
+          _id: uid(), 'Task ID': t._id, 'Topic ID': t['Topic ID'], 'Program Name': p['Program Name'] || '', Topic: p.Topic || '', Task: t.Task,
+          Person: person, 'Start Date': c.from, 'End Date': c.to, 'Hours per Day': String(c.hours), 'Include Weekends': $('#tlWeekends', root).checked ? 'Yes' : 'No',
+          'Working Days': String(c.days.length), 'Total Hours': String(Math.round(c.days.length * c.hours * 100) / 100), Notes: $('#tlNotes', root).value.trim(),
+          'Logged By': settings.name || 'Team member', 'Logged At': new Date().toISOString()
+        };
+        await commit('timelog', 'upsert', { row }, { action: 'Added', item: t.Task, itemId: t._id, details: `${person}: ${fmtH(c.hours)}/day × ${c.days.length} days = ${fmtH(c.days.length * c.hours)} (${c.from} to ${c.to})` });
+        toast(`${fmtH(c.days.length * c.hours)} logged for ${person}`);
+        return openTimeLog(taskId, onChange);
+      }
+      if (k === 'del') {
+        const e = state.data.timelog.find((x) => x._id === b.dataset.id);
+        root.innerHTML = '';
+        document.removeEventListener('keydown', onKey, true);
+        if (e && (await confirmDelete({ title: 'Delete this time entry?', lines: [`${e.Person}: ${fmtH(entryHours(e))} on "${t.Task}" (${e['Start Date']} to ${e['End Date']}).`] }))) {
+          await commit('timelog', 'delete', { id: e._id });
+          toast('Time entry deleted');
+        }
+        return openTimeLog(taskId, onChange);
+      }
+    }));
+  }
+
+  // Assign several tasks to one person at once.
+  async function assignTasks(ids, person) {
+    const rows = state.data.tasks.filter((t) => ids.has(t._id) && t.Owner !== person).map((t) => Object.assign({}, t, { Owner: person }));
+    if (!rows.length) return toast(`Already assigned to ${person}`);
+    await commit('tasks', 'upsertMany', { rows }, { action: 'Updated', item: `${rows.length} task${rows.length === 1 ? '' : 's'}`, details: `Assigned to ${person}: ${rows.map((r) => short(r.Task, 40)).join('; ')}` });
+    toast(`${rows.length} task${rows.length === 1 ? '' : 's'} assigned to ${person}`);
+  }
+  function assignBarHtml(sel) {
+    if (!sel.size) return '';
+    return `<div class="bulk-bar on"><b>${sel.size} selected</b><span class="spacer"></span>
+      <label class="check">Assign to <select class="select" data-assignto style="min-height:32px;padding:4px 8px;width:auto">${teamNames().map((n) => `<option>${esc(n)}</option>`).join('')}</select></label>
+      <button class="btn sm primary" type="button" data-assign>Assign</button><button class="btn sm ghost" type="button" data-selclear>Clear</button></div>`;
+  }
+
+  // Utilization: hours logged per person per day against an 8-hour working day.
+  function utilPeriod(f) {
+    const t = todayDate();
+    const y = +f.year || t.getFullYear();
+    if (f.month) { const m = MONTHS.indexOf(f.month); return { kind: 'month', start: new Date(y, m, 1), end: new Date(y, m + 1, 0), label: new Date(y, m, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) }; }
+    if (f.year && y !== t.getFullYear()) return { kind: 'year', start: new Date(y, 0, 1), end: new Date(y, 11, 31), label: String(y) };
+    return { kind: 'month', start: new Date(t.getFullYear(), t.getMonth(), 1), end: new Date(t.getFullYear(), t.getMonth() + 1, 0), label: t.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) + ' (this month)' };
+  }
+  function drawUtilization(sc) {
+    const box = $('#util');
+    if (!box) return;
+    const p = utilPeriod(sc.f);
+    const today = isoLocal(todayDate());
+    const startIso = isoLocal(p.start), endIso = isoLocal(p.end);
+    const capEnd = p.end < todayDate() ? endIso : today;
+    const capDays = p.start > todayDate() ? 0 : entryDates(startIso, capEnd, false).length;
+    $('#utSub').textContent = `${p.label} · capacity ${HOURS_PER_DAY} h per working day`;
+    // Spread each entry's hours over its days, keeping only days inside the period.
+    const byPerson = {};
+    const entries = state.data.timelog.filter((e) => !sc.f.program || e['Program Name'] === sc.f.program);
+    for (const e of entries) {
+      const per = num(e['Hours per Day']) || 0;
+      for (const d of entryDates(e['Start Date'], e['End Date'], e['Include Weekends'] === 'Yes')) {
+        if (d < startIso || d > endIso) continue;
+        const who = e.Person || '(unknown)';
+        byPerson[who] = byPerson[who] || {};
+        byPerson[who][d] = (byPerson[who][d] || 0) + per;
+      }
+    }
+    const people = uniq(usersList().map((u) => u.Name).concat(Object.keys(byPerson)));
+    const rows = people.map((name) => {
+      const days = byPerson[name] || {};
+      const hours = Object.values(days).reduce((a, b) => a + b, 0);
+      const cap = capDays * HOURS_PER_DAY;
+      return { name, hours, today: days[today] || 0, daysLogged: Object.keys(days).length, util: cap ? (hours / cap) * 100 : null, avg: Object.keys(days).length ? hours / Object.keys(days).length : null };
+    }).sort((a, b) => b.hours - a.hours);
+    const anyTime = rows.some((r) => r.hours);
+    box.innerHTML = `<div class="grid" style="grid-template-columns:1fr">
+      <div><div class="table-wrap" style="max-height:none"><table class="data"><thead><tr><th>Person</th><th>Today</th><th>Hours Logged</th><th>Days Logged</th><th>Avg per Day</th><th>Utilization</th></tr></thead><tbody>
+        ${rows.map((r) => `<tr style="cursor:default"><td class="nowrap"><b>${esc(r.name)}</b></td><td>${r.today ? fmtH(r.today) : '<span class="row-meta">—</span>'}</td>
+          <td><b>${fmtH(r.hours)}</b></td><td>${r.daysLogged}</td><td>${r.avg == null ? '—' : fmtH(r.avg)}</td>
+          <td class="nowrap">${r.util == null ? '—' : `<span class="databar"><i style="width:${Math.min(100, Math.round(r.util))}%;background:${r.util > 100 ? 'var(--crit)' : r.util >= 70 ? 'var(--good)' : 'var(--warn)'}"></i></span>${Math.round(r.util)}%`}</td></tr>`).join('')}
+      </tbody></table></div>
+      <p class="note">Utilization = hours logged ÷ (${capDays} working day${capDays === 1 ? '' : 's'} so far × ${HOURS_PER_DAY} h). Log time from the clock button on any task.</p></div>
+      <div class="chart-box" id="utChartBox" style="height:240px"><canvas id="chUtil" aria-label="Hours logged by person"></canvas></div></div>`;
+    if (!anyTime) { $('#utChartBox').innerHTML = emptyBox('No time logged in this period', ' Use the clock button on a task to log hours.'); $('#utChartBox').style.height = 'auto'; return; }
+    let labels, keyOf;
+    if (p.kind === 'month') {
+      const n = p.end.getDate();
+      labels = Array.from({ length: n }, (_, i) => String(i + 1));
+      keyOf = (i) => isoLocal(new Date(p.start.getFullYear(), p.start.getMonth(), i + 1));
+    } else {
+      labels = MONTHS.map((m) => m.slice(0, 3));
+      keyOf = null;
+    }
+    const withTime = rows.filter((r) => r.hours).slice(0, 5);
+    barChart($('#chUtil'), {
+      labels, stacked: true,
+      datasets: withTime.map((r, i) => ({
+        label: r.name, color: C.series[i % C.series.length],
+        data: labels.map((_, idx) => {
+          const days = byPerson[r.name] || {};
+          if (keyOf) return Math.round((days[keyOf(idx)] || 0) * 100) / 100;
+          return Math.round(Object.entries(days).filter(([d]) => +d.slice(5, 7) === idx + 1).reduce((s, [, h]) => s + h, 0) * 100) / 100;
+        })
+      })),
+      valueFmt: (v) => fmtH(v)
+    });
+  }
+
+  // Bulk update: set one field on every participant row the current filters show.
+  function openBulkUpdate(ds) {
+    const rows = state.currentRows && state.currentRows.ds === ds ? state.currentRows.rows : state.data[ds];
+    if (!rows.length) return toast('No rows match the current filters', true);
+    const f = state.filters[ds];
+    const cols = columnsFor(ds, state.data[ds]);
+    const scope = [f.program, f.mod, f.q ? `search "${f.q}"` : ''].filter(Boolean).join(' · ') || 'all rows';
+    const m = openModal(`
+      <div class="modal-head"><div><h2>Bulk Update</h2><div class="note">${rows.length} ${esc(DS[ds].label.toLowerCase())} rows shown (${esc(scope)})</div></div><button class="icon-btn" data-close type="button" aria-label="Close">✕</button></div>
+      <div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr">
+        <p class="note" style="margin:0">Use the Program and Module filters and the search box to choose the rows first, e.g. one program's batch. Then set the value once for all of them.</p>
+        <label class="field">Field to update<select class="select" id="buCol">${cols.map((c) => `<option>${esc(c)}</option>`).join('')}</select></label>
+        <label class="field">New value<span id="buValWrap"></span></label>
+        <div class="field">How
+          <label class="check"><input type="radio" name="buMode" value="blank" checked> Only fill blank cells (keeps values already entered)</label>
+          <label class="check"><input type="radio" name="buMode" value="all"> Replace the value in every row shown</label></div>
+        <div class="tl-sum" id="buSum"></div>
+      </div></div>
+      <div class="modal-foot"><button class="btn" data-close type="button">Cancel</button><button class="btn primary" id="buGo" type="button">Update</button></div>`, { size: 'sm' });
+    const valInput = () => {
+      const c = $('#buCol', m).value;
+      const known = uniq(state.data[ds].map((r) => r[c]).filter((v) => v && String(v).length < 60)).slice(0, 60);
+      $('#buValWrap', m).innerHTML = DS[ds].dates.includes(c) ? '<input class="input" id="buVal" type="date">'
+        : `<input class="input" id="buVal" list="buList" autocomplete="off"><datalist id="buList">${known.map((v) => `<option value="${esc(v)}">`).join('')}</datalist>`;
+      $('#buVal', m).addEventListener('input', sum);
+    };
+    const targets = () => {
+      const c = $('#buCol', m).value, mode = $('input[name=buMode]:checked', m).value, v = ($('#buVal', m).value || '').trim();
+      return { c, v, mode, hit: rows.filter((r) => (mode === 'all' ? String(r[c] || '') !== v : !String(r[c] || '').trim())) };
+    };
+    const sum = () => { const t = targets(); $('#buSum', m).innerHTML = t.v ? `Will set <b>${esc(t.c)}</b> to <b>${esc(t.v)}</b> on <b>${t.hit.length}</b> of ${rows.length} rows.` : 'Enter the new value.'; $('#buGo', m).textContent = t.v && t.hit.length ? `Update ${t.hit.length} row${t.hit.length === 1 ? '' : 's'}` : 'Update'; };
+    $('#buCol', m).addEventListener('change', () => { valInput(); sum(); });
+    $$('input[name=buMode]', m).forEach((r) => r.addEventListener('change', sum));
+    valInput(); sum();
+    $('#buGo', m).addEventListener('click', async () => {
+      const t = targets();
+      if (!t.v) return $('#buVal', m).focus();
+      if (!t.hit.length) return toast('Nothing to change: those rows already have a value', true);
+      closeModal();
+      await commit(ds, 'upsertMany', { rows: t.hit.map((r) => Object.assign({}, r, { [t.c]: t.v })) },
+        { action: 'Updated', item: DS[ds].label, details: `Bulk update: ${t.c} set to "${short(t.v, 40)}" on ${t.hit.length} rows (${t.mode === 'all' ? 'replaced' : 'blank cells only'}; ${scope})` });
+      toast(`${t.hit.length} rows updated`);
+    });
+  }
+
   // ---------------------------------------------------------------- Tasks page
   function renderTasks(el) {
     const f = state.filters.tasks;
@@ -1818,8 +2072,19 @@
         <span class="spacer"></span>
         <button class="btn accent" id="tkAdd" type="button" ${state.data.tracker.length ? '' : 'disabled title="Add a program first"'}>+ Add task</button>
       </div>
+      <div id="tkBulk"></div>
       <div id="tkResults"></div>`;
     const bind = (id, key, ev) => $(id, el).addEventListener(ev || 'change', (e) => { f[key] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; drawTaskTable(); });
+    $('#tkResults', el).addEventListener('change', (e) => {
+      if (!e.target.matches('[data-ksel]')) return;
+      if (e.target.checked) state.taskSel.add(e.target.value); else state.taskSel.delete(e.target.value);
+      e.target.closest('tr').classList.toggle('is-sel', e.target.checked);
+      drawTaskBulk();
+    });
+    $('#tkBulk', el).addEventListener('click', async (e) => {
+      if (e.target.closest('[data-selclear]')) { state.taskSel.clear(); return drawTaskTable(); }
+      if (e.target.closest('[data-assign]')) { const who = $('[data-assignto]', el).value; await assignTasks(state.taskSel, who); state.taskSel.clear(); }
+    });
     bind('#tkSearch', 'q', 'input'); bind('#tkProgram', 'program'); bind('#tkStatus', 'status'); bind('#tkOwner', 'owner'); bind('#tkDue', 'due'); bind('#tkMine', 'mine');
     $('#tkAdd', el).addEventListener('click', () => openTaskModal(null));
     drawTaskTable();
@@ -1849,16 +2114,21 @@
       return;
     }
     const topicOf = (t) => { const p = parentOf(t); return p ? itemTitle('tracker', p) : `${t['Program Name'] || ''} · ${t.Topic || ''} (topic removed)`; };
+    for (const id of Array.from(state.taskSel)) if (!state.data.tasks.some((t) => t._id === id)) state.taskSel.delete(id);
+    drawTaskBulk();
     drawTable(box, 'tasks', rows, [
+      { k: '_sel', label: '✓', w: 'nowrap', fmt: (t) => `<input type="checkbox" class="t-check" data-ksel value="${esc(t._id)}" ${state.taskSel.has(t._id) ? 'checked' : ''} aria-label="Select ${esc(t.Task)}">`, sortVal: (t) => (state.taskSel.has(t._id) ? 0 : 1) },
       { k: 'Due Date', label: 'Due', w: 'nowrap', fmt: taskDue, sortVal: (t) => t['Due Date'] || '9999' },
       { k: 'Task', w: 'topic', fmt: (t) => `<b>${esc(t.Task)}</b>` },
       { k: '_topic', label: 'Program / Topic', w: 'topic', fmt: (t) => esc(topicOf(t)), sortVal: topicOf },
       { k: 'Category', w: 'nowrap' },
       { k: 'Owner', w: 'nowrap' },
       { k: 'Status', w: 'nowrap', fmt: (t) => inlineSelect(t, 'Status', 'tasks') },
+      { k: '_hours', label: 'Time Spent', w: 'nowrap', fmt: timeChip, sortVal: (t) => taskHours(t._id) },
       { k: 'Details / Requirements', label: 'Details / Requirements', w: 'wrap' }
     ]);
   }
+  function drawTaskBulk() { const b = $('#tkBulk'); if (b) b.innerHTML = assignBarHtml(state.taskSel); }
 
   // ---------------------------------------------------------------- Activity log page
   const ACTION_CLASS = { Deleted: 'crit', Cleared: 'crit', Restored: 'good', Added: 'prog', Updated: '', Imported: 'warn' };
@@ -2509,6 +2779,8 @@
   function setupGlobal() {
     // Row clicks open the editor (tables, upcoming list, board tiles)
     $('#view').addEventListener('click', (e) => {
+      const tt = e.target.closest('[data-ttime]');
+      if (tt) { openTimeLog(tt.dataset.ttime, () => render()); return; }
       const tc = e.target.closest('[data-tasks]');
       if (tc) { openEditor('tracker', tc.dataset.tasks, { tab: 'tasks' }); return; }
       const t = e.target.closest('[data-edit]');

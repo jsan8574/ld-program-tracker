@@ -28,6 +28,8 @@ The tabs (Program Tracker, Tasks & Logistics, Attendance, Assessments, Training 
 
 **Users and Admins.** Everyone picks their name from the team list when they open the dashboard. Admins also see **Settings**, where they add or remove users and choose who is an Admin. The list is stored in the Sheet's **Users** tab. Until an Admin changes it, the default list is Jimmar San Buenaventura (Admin), Rekha Krishna and Zameer Amanulla.
 
+**Time log and utilization.** Tasks have a clock button for logging time: who, from and to dates, and hours per day. Totals count Mon–Fri unless "Include weekends" is ticked. Entries are stored in the **Time Log** tab. Program Delivery's **Team Utilization** compares logged hours with 8 hours per working day.
+
 **If you change Code.gs later**, go to **Deploy → Manage deployments → Edit → Version: New version**. This keeps the same URL.
 
 ## Running without the shared sheet

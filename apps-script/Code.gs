@@ -17,6 +17,7 @@ var TABS = {
   survey: 'Training Survey',
   announcements: 'Announcements',
   users: 'Users',
+  timelog: 'Time Log',
   activity: 'Activity Log'
 };
 // The activity log is append-only: the dashboard can add entries but never edit or remove them.
